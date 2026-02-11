@@ -4,7 +4,7 @@ A btop-style terminal user interface for real-time monitoring of ESP32 microcont
 
 ![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)
 ![ESP32](https://img.shields.io/badge/ESP32-Arduino-green.svg)
-![License](https://img.shields.io/badge/License-MIT-yellow.svg)
+
 
 ## Features
 
@@ -228,9 +228,7 @@ TUI/
 └── README.md       # This file
 ```
 
-## License
 
-MIT License - feel free to use and modify.
 
 ## Contributing
 
