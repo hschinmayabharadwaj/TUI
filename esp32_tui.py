@@ -7,7 +7,9 @@ import time
 from collections import deque
 
 from rich import box
-from rich.console import Console
+from rich.align import Align
+from rich.columns import Columns
+from rich.console import Console, Group
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
@@ -19,7 +21,34 @@ BAUD = 115200
 
 console = Console()
 
-# Shared state (main thread reads; keyboard/serial threads write via lock)
+# ── btop-inspired palette ────────────────────────────────────────────────────
+THEME = {
+    "bg": "grey11",
+    "fg": "grey85",
+    "dim": "grey50",
+    "accent": "cyan",
+    "cpu": "green",
+    "mem": "magenta",
+    "net": "bright_cyan",
+    "proc": "yellow",
+    "warn": "bright_yellow",
+    "danger": "bright_red",
+    "ok": "bright_green",
+    "select_bg": "grey23",
+    "select_fg": "white",
+    "header_bg": "grey7",
+}
+
+STATE_COLORS = {
+    "running": "bright_green",
+    "ready": "bright_blue",
+    "blocked": "yellow",
+    "suspended": "bright_magenta",
+    "deleted": "red",
+    "invalid": "dim",
+}
+
+# Shared state
 state_lock = threading.Lock()
 running = True
 paused = False
@@ -31,16 +60,17 @@ pending_kill_name = None
 last_data = {}
 status_message = ""
 status_message_until = 0.0
+last_telemetry_at = 0.0
 
 telemetry_queue = queue.Queue()
 command_queue = queue.Queue()
 
 last_time = time.time()
 throughput_rate = 0.0
-download_history = deque(maxlen=60)
-upload_history = deque(maxlen=60)
-cpu_history = deque(maxlen=50)
-heap_history = deque(maxlen=50)
+download_history = deque(maxlen=80)
+upload_history = deque(maxlen=80)
+cpu_history = deque(maxlen=80)
+heap_history = deque(maxlen=80)
 total_download = 0.0
 total_upload = 0.0
 
@@ -57,135 +87,136 @@ def is_protected_task(task):
 
 
 def calculate_throughput(raw_len):
-    global last_time, throughput_rate, total_download
+    global last_time, throughput_rate, total_download, last_telemetry_at
     now = time.time()
     dt = max(now - last_time, 1e-6)
     last_time = now
     throughput_rate = raw_len / dt / 1024
     total_download += raw_len / 1024
     download_history.append(throughput_rate)
+    last_telemetry_at = now
     return throughput_rate
 
 
-def create_graph(data, width, height, color="green", max_val=None):
-    if not data:
-        return ["" for _ in range(height)]
+def fmt_size(b):
+    if b >= 1024 * 1024:
+        return f"{b / 1024 / 1024:.1f} MiB"
+    if b >= 1024:
+        return f"{b / 1024:.1f} KiB"
+    return f"{b} B"
 
-    values = list(data)
-    if max_val is None:
-        max_val = max(values) if values else 1
-    max_val = max(max_val, 0.001)
 
-    if len(values) < width:
-        values = [0] * (width - len(values)) + values
+def fmt_uptime(ms):
+    s = ms // 1000
+    d, s = divmod(s, 86400)
+    h, s = divmod(s, 3600)
+    m, s = divmod(s, 60)
+    if d:
+        return f"{d}d {h:02d}:{m:02d}:{s:02d}"
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def progress_bar(pct, width=24, fill=None, empty="░"):
+    fill = fill or THEME["cpu"]
+    filled = max(0, min(width, int(round(pct / 100 * width))))
+    return f"[{fill}]{'█' * filled}[/][{THEME['dim']}]{empty * (width - filled)}[/]"
+
+
+def braille_sparkline(values, width=48, height=8):
+    """Render a smooth sparkline using Unicode braille (btop-style)."""
+    if not values:
+        return Text(" " * width, style=THEME["dim"])
+
+    vals = list(values)
+    if len(vals) < width:
+        vals = [0.0] * (width - len(vals)) + vals
     else:
-        values = values[-width:]
+        vals = vals[-width:]
 
+    peak = max(max(vals), 0.001)
+    normalized = [v / peak for v in vals]
+
+    lines = []
+    for row in range(height - 1, -1, -1):
+        chars = []
+        threshold_lo = row / height
+        threshold_hi = (row + 1) / height
+        for val in normalized:
+            if val >= threshold_hi:
+                chars.append("⣿")
+            elif val >= threshold_lo + (threshold_hi - threshold_lo) * 0.66:
+                chars.append("⣷")
+            elif val >= threshold_lo + (threshold_hi - threshold_lo) * 0.33:
+                chars.append("⣯")
+            elif val >= threshold_lo:
+                chars.append("⣀")
+            else:
+                chars.append(" ")
+        lines.append("".join(chars))
+
+    return Text("\n".join(lines), style=THEME["cpu"])
+
+
+def block_graph(values, width=40, height=6, color=THEME["net"], ceiling=None):
+    if not values:
+        return Text("", style=THEME["dim"])
+
+    vals = list(values)
+    if len(vals) < width:
+        vals = [0.0] * (width - len(vals)) + vals
+    else:
+        vals = vals[-width:]
+
+    peak = ceiling if ceiling else max(max(vals), 0.001)
     blocks = " ▁▂▃▄▅▆▇█"
     lines = []
-
     for row in range(height - 1, -1, -1):
-        line = ""
-        for val in values:
-            normalized = val / max_val
-            block_height = int(normalized * height)
-            if block_height > row:
-                char_idx = min(8, int((normalized * height - row) * 8))
-                line += f"[{color}]{blocks[char_idx]}[/]"
+        line = Text()
+        for val in vals:
+            norm = val / peak
+            block_h = int(norm * height)
+            if block_h > row:
+                idx = min(8, int((norm * height - row) * 8))
+                line.append(blocks[idx], style=color)
             else:
-                line += " "
+                line.append(" ", style=THEME["dim"])
         lines.append(line)
-
-    return lines
-
-
-def create_cpu_panel(data):
-    cpu_mhz = data.get("cpu_mhz", 0)
-    max_mhz = data.get("max_cpu_mhz", 240)
-    cpu_percent = (cpu_mhz / max_mhz) * 100 if max_mhz else 0
-    cpu_history.append(cpu_percent)
-
-    uptime = data.get("uptime_ms", 0) // 1000
-    days, remainder = divmod(uptime, 86400)
-    hours, remainder = divmod(remainder, 3600)
-    minutes, seconds = divmod(remainder, 60)
-
-    graph_lines = create_graph(cpu_history, 40, 6, "green", 100)
-    graph_text = "\n".join(graph_lines)
-
-    core0 = data.get("cpu_core0", cpu_percent * 0.5)
-    core1 = data.get("cpu_core1", cpu_percent * 0.5)
-
-    content = f"""[bold white]CPU[/] [green]{'█' * int(cpu_percent / 5)}{'░' * (20 - int(cpu_percent / 5))}[/] {cpu_percent:.0f}%
-[dim]C0[/]  [cyan]{'█' * int(core0 / 5)}{'░' * (20 - int(core0 / 5))}[/] {core0:.0f}%
-[dim]C1[/]  [cyan]{'█' * int(core1 / 5)}{'░' * (20 - int(core1 / 5))}[/] {core1:.0f}%
-
-{graph_text}
-
-[dim]up[/] {days}d {hours:02d}:{minutes:02d}:{seconds:02d}"""
-
-    return Panel(content, title="[bold]cpu[/]", box=box.ROUNDED, border_style="green", title_align="left")
+    return Text("\n").join(lines)
 
 
-def create_memory_panel(data):
-    total_heap = data.get("total_heap", 327680)
-    free_heap = data.get("heap", 0)
-    min_heap = data.get("min_heap", 0)
-    used_heap = total_heap - free_heap if free_heap > 0 else 0
-    heap_percent = (used_heap / total_heap) * 100 if total_heap else 0
-    heap_history.append(heap_percent)
+def rssi_indicator(rssi):
+    """WiFi signal strength as bars + label."""
+    if rssi == 0:
+        return Text("── no link ──", style=THEME["dim"])
+    if rssi >= -50:
+        bars, label, color = 4, "excellent", THEME["ok"]
+    elif rssi >= -60:
+        bars, label, color = 3, "good", THEME["cpu"]
+    elif rssi >= -70:
+        bars, label, color = 2, "fair", THEME["warn"]
+    else:
+        bars, label, color = 1, "weak", THEME["danger"]
 
-    def fmt_size(b):
-        if b >= 1024 * 1024:
-            return f"{b / 1024 / 1024:.1f} MiB"
-        if b >= 1024:
-            return f"{b / 1024:.1f} KiB"
-        return f"{b} B"
-
-    used_bar = int(heap_percent / 5)
-    free_bar = 20 - used_bar
-    color = "green" if heap_percent < 60 else "yellow" if heap_percent < 80 else "red"
-
-    content = f"""[bold]Total:[/]       {fmt_size(total_heap):>12}
-[bold]Used:[/]        {fmt_size(used_heap):>12}
-  [{color}]{heap_percent:.0f}%[/]  [{color}]{'█' * used_bar}[/][dim]{'░' * free_bar}[/]
-
-[bold]Available:[/]   {fmt_size(free_heap):>12}
-  [green]{100 - heap_percent:.0f}%[/]  [green]{'█' * free_bar}[/][dim]{'░' * used_bar}[/]
-
-[bold]Min Free:[/]    {fmt_size(min_heap):>12}
-  [dim]Watermark (lowest ever)[/]
-
-[bold]Free:[/]        {fmt_size(free_heap):>12}
-  [dim]1%[/]"""
-
-    return Panel(content, title="[bold]mem[/]", box=box.ROUNDED, border_style="magenta", title_align="left")
+    bar = "".join("▮" if i < bars else "▯" for i in range(4))
+    return Text.assemble(
+        (bar + " ", color),
+        (f"{rssi} dBm ", THEME["fg"]),
+        (label, THEME["dim"]),
+    )
 
 
-def create_network_panel(data):
-    global total_upload
+def state_badge(state):
+    key = (state or "?").lower()
+    color = STATE_COLORS.get(key, THEME["dim"])
+    label = (state or "?")[:10].ljust(10)
+    return Text(f" {label} ", style=f"bold {color} on grey19")
 
-    rssi = data.get("rssi", 0)
-    download_speed = throughput_rate
-    upload_speed = data.get("tx_rate", 0)
-    upload_history.append(upload_speed)
-    total_upload += upload_speed * 0.1
 
-    graph_lines = create_graph(download_history, 35, 8, "cyan", 50)
-    graph_text = "\n".join(graph_lines)
-
-    content = f"""{graph_text}
-
-[green]▼[/] {download_speed:.1f} KB/s     [dim](0 bitps)[/]
-[green]▼[/] Top:     ({download_speed * 8:.1f} Kibps)
-[green]▼[/] Total:   {total_download:.2f} KiB
-
-[red]▲[/] {upload_speed:.1f} KB/s     [dim](0 bitps)[/]
-[red]▲[/] Top:     ({upload_speed * 8:.1f} Kibps)
-[red]▲[/] Total:   {total_upload:.2f} KiB
-                       [bold]download                upload[/]"""
-
-    return Panel(content, title=f"[bold]net[/] [dim]RSSI:{rssi}dBm[/]", box=box.ROUNDED, border_style="cyan", title_align="left")
+def panel_title(icon, name, extra=""):
+    parts = f"[bold {THEME['fg']}]{icon}[/] [bold {name}][/]"
+    if extra:
+        parts += f"  [dim]{extra}[/]"
+    return parts
 
 
 def visible_tasks(data):
@@ -195,157 +226,475 @@ def visible_tasks(data):
     return [t for t in all_tasks if not is_protected_task(t)]
 
 
+def task_state_summary(tasks):
+    counts = {}
+    for t in tasks:
+        s = t.get("state", "?")
+        counts[s] = counts.get(s, 0) + 1
+    if not counts:
+        return Text("no tasks", style=THEME["dim"])
+    parts = []
+    for state, n in sorted(counts.items(), key=lambda x: -x[1]):
+        color = STATE_COLORS.get(state.lower(), THEME["dim"])
+        parts.append((f"{state}:{n} ", color))
+    return Text.assemble(*parts)
+
+
+def create_cpu_panel(data):
+    cpu_mhz = data.get("cpu_mhz", 0)
+    max_mhz = data.get("max_cpu_mhz", 240)
+    cpu_pct = (cpu_mhz / max_mhz) * 100 if max_mhz else 0
+    cpu_history.append(cpu_pct)
+
+    core0 = data.get("cpu_core0", cpu_pct * 0.55)
+    core1 = data.get("cpu_core1", cpu_pct * 0.45)
+    uptime = fmt_uptime(data.get("uptime_ms", 0))
+
+    spark = braille_sparkline(cpu_history, width=44, height=7)
+
+    grid = Table.grid(padding=(0, 1))
+    grid.add_column(ratio=1)
+    grid.add_column(width=8, justify="right")
+
+    grid.add_row(
+        Text.assemble(("clock ", THEME["dim"]), (f"{cpu_mhz}", THEME["accent"]), (" MHz", THEME["dim"])),
+        Text(f"{cpu_pct:.0f}%", style=THEME["cpu"]),
+    )
+    grid.add_row(progress_bar(cpu_pct, width=28, fill=THEME["cpu"]), "")
+    grid.add_row("", "")
+    grid.add_row(
+        Text.assemble(("core0 ", THEME["dim"]), (f"{core0:.0f}%", "cyan")),
+        "",
+    )
+    grid.add_row(progress_bar(core0, width=28, fill="cyan"), "")
+    grid.add_row(
+        Text.assemble(("core1 ", THEME["dim"]), (f"{core1:.0f}%", "bright_blue")),
+        "",
+    )
+    grid.add_row(progress_bar(core1, width=28, fill="bright_blue"), "")
+
+    body = Group(
+        grid,
+        Text(""),
+        spark,
+        Text.assemble(("uptime ", THEME["dim"]), (uptime, THEME["fg"])),
+    )
+
+    return Panel(
+        body,
+        title=panel_title("◉", "cpu", f"max {max_mhz} MHz"),
+        box=box.ROUNDED,
+        border_style=THEME["cpu"],
+        title_align="left",
+        padding=(0, 1),
+    )
+
+
+def create_memory_panel(data):
+    total = data.get("total_heap", 327680)
+    free = data.get("heap", 0)
+    min_free = data.get("min_heap", 0)
+    used = max(0, total - free)
+    pct = (used / total) * 100 if total else 0
+    heap_history.append(pct)
+
+    if pct < 55:
+        bar_color = THEME["ok"]
+    elif pct < 80:
+        bar_color = THEME["warn"]
+    else:
+        bar_color = THEME["danger"]
+
+    spark = braille_sparkline(heap_history, width=28, height=5)
+    spark.stylize(THEME["mem"])
+
+    stats = Table.grid(padding=(0, 0))
+    stats.add_column(style=THEME["dim"], width=10)
+    stats.add_column(justify="right", style=THEME["fg"])
+    stats.add_row("total", fmt_size(total))
+    stats.add_row("used", fmt_size(used))
+    stats.add_row("free", fmt_size(free))
+    stats.add_row("min free", fmt_size(min_free))
+
+    gauge = Table.grid(padding=(0, 0))
+    gauge.add_row(Text(f"{pct:.1f}% used", style=f"bold {bar_color}"))
+    gauge.add_row(progress_bar(pct, width=26, fill=bar_color))
+    gauge.add_row(Text(""))
+    gauge.add_row(spark)
+    gauge.add_row(Text(""))
+
+    content = Columns([stats, gauge], equal=False, expand=True)
+
+    return Panel(
+        content,
+        title=panel_title("▣", "mem", fmt_size(total)),
+        box=box.ROUNDED,
+        border_style=THEME["mem"],
+        title_align="left",
+        padding=(0, 1),
+    )
+
+
+def create_network_panel(data):
+    global total_upload
+
+    rssi = data.get("rssi", 0)
+    dl = throughput_rate
+    ul = data.get("tx_rate", 0)
+    upload_history.append(ul)
+    total_upload += ul * 0.1
+
+    dl_graph = block_graph(download_history, width=30, height=5, color=THEME["net"], ceiling=50)
+    ul_graph = block_graph(upload_history, width=30, height=3, color=THEME["danger"], ceiling=20)
+
+    grid = Table.grid(padding=(0, 1))
+    grid.add_column()
+    grid.add_row(rssi_indicator(rssi))
+    grid.add_row(Text(""))
+    grid.add_row(Text.assemble(("▼ down ", THEME["dim"]), (f"{dl:6.1f}", THEME["net"]), (" KB/s", THEME["dim"])))
+    grid.add_row(dl_graph)
+    grid.add_row(Text.assemble(("  total ", THEME["dim"]), (f"{total_download:.1f} KiB", THEME["fg"])))
+    grid.add_row(Text(""))
+    grid.add_row(Text.assemble(("▲ up   ", THEME["dim"]), (f"{ul:6.1f}", THEME["danger"]), (" KB/s", THEME["dim"])))
+    grid.add_row(ul_graph)
+    grid.add_row(Text.assemble(("  total ", THEME["dim"]), (f"{total_upload:.1f} KiB", THEME["fg"])))
+
+    return Panel(
+        grid,
+        title=panel_title("⇅", "net", "serial telemetry"),
+        box=box.ROUNDED,
+        border_style=THEME["net"],
+        title_align="left",
+        padding=(0, 1),
+    )
+
+
+def selected_task_detail(data):
+    tasks = visible_tasks(data)
+    with state_lock:
+        idx = selected_index
+
+    if not tasks or idx >= len(tasks[:18]):
+        return Panel(
+            Align.center(Text("select a task with ↑ ↓", style=THEME["dim"]), vertical="middle"),
+            title=panel_title("›", "detail"),
+            box=box.ROUNDED,
+            border_style=THEME["dim"],
+            height=5,
+            padding=(0, 1),
+        )
+
+    task = tasks[idx]
+    protected = is_protected_task(task)
+    stack = task.get("stack_hwm", task.get("mem", 0))
+
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style=THEME["dim"], width=8)
+    grid.add_column(style=THEME["fg"])
+    grid.add_column(style=THEME["dim"], width=8)
+    grid.add_column(style=THEME["fg"])
+
+    grid.add_row("pid", str(task.get("pid", "?")), "priority", str(task.get("priority", "?")))
+    grid.add_row("name", task.get("name", "?"), "stack", fmt_size(stack))
+    grid.add_row("state", task.get("state", "?"), "user", task.get("user", "system"))
+    grid.add_row(
+        "protected",
+        "yes — cannot kill" if protected else "no — killable",
+        "mem",
+        fmt_size(task.get("mem", stack)),
+    )
+
+    border = THEME["danger"] if protected else THEME["accent"]
+    return Panel(
+        grid,
+        title=panel_title("›", "detail", task.get("name", "")),
+        box=box.ROUNDED,
+        border_style=border,
+        height=7,
+        padding=(0, 1),
+    )
+
+
+def create_kill_overlay():
+    with state_lock:
+        name = pending_kill_name
+        pid = pending_kill_pid
+
+    if not name:
+        return None
+
+    body = Table.grid(padding=(0, 1))
+    body.add_column(justify="center")
+    body.add_row(Text("⚠  TERMINATE TASK", style=f"bold {THEME['danger']}"))
+    body.add_row(Text(""))
+    body.add_row(Text(f"{name}", style=f"bold {THEME['fg']}"))
+    body.add_row(Text(f"pid {pid}", style=THEME["dim"]))
+    body.add_row(Text(""))
+    body.add_row(
+        Text.assemble(
+            ("  ", THEME["dim"]),
+            (" Y ", f"bold white on {THEME['danger']}"),
+            (" confirm   ", THEME["dim"]),
+            (" N ", "bold white on grey35"),
+            (" cancel  ", THEME["dim"]),
+        )
+    )
+
+    return Panel(
+        Align.center(body, vertical="middle"),
+        box=box.DOUBLE,
+        border_style=THEME["danger"],
+        padding=(1, 2),
+        width=42,
+    )
+
+
 def create_tasks_panel(data):
-    task_count = data.get("task_count", 0)
     all_tasks = data.get("tasks", [])
     tasks_to_show = visible_tasks(data)
-
-    table = Table(show_header=True, header_style="bold", expand=True, box=None, padding=(0, 1))
-    table.add_column("", width=1)
-    table.add_column("Pid:", style="cyan", width=6, justify="right")
-    table.add_column("Program:", style="green", width=16)
-    table.add_column("State:", style="white", width=10)
-    table.add_column("Prio:", width=5, justify="right")
-    table.add_column("Stack:", width=8, justify="right")
-    table.add_column("MemB", width=8, justify="right")
-    table.add_column("User:", style="yellow", width=8)
-
-    if not all_tasks:
-        return Panel(
-            "[dim]Waiting for task data from ESP32...[/]",
-            title=f"[bold]proc[/] [dim]tasks: {task_count}[/]",
-            box=box.ROUNDED,
-            border_style="yellow",
-            title_align="left",
-        )
+    task_count = data.get("task_count", len(all_tasks))
 
     with state_lock:
         sel = selected_index
         confirm = kill_confirm
         pending_pid = pending_kill_pid
-        pending_name = pending_kill_name
 
-    for idx, task in enumerate(tasks_to_show[:15]):
-        mem = task.get("mem", task.get("stack_hwm", 0))
-        stack = task.get("stack_hwm", mem)
+    if not all_tasks:
+        empty = Align.center(
+            Group(
+                Text("⏳ waiting for ESP32…", style=THEME["warn"]),
+                Text("check serial port & baud 115200", style=THEME["dim"]),
+            ),
+            vertical="middle",
+        )
+        return Panel(
+            empty,
+            title=panel_title("☰", "proc", f"0 tasks"),
+            box=box.ROUNDED,
+            border_style=THEME["proc"],
+            padding=(1, 1),
+        )
+
+    table = Table(
+        show_header=True,
+        header_style=f"bold {THEME['dim']}",
+        expand=True,
+        box=None,
+        padding=(0, 1),
+        row_styles=["", f"on {THEME['bg']}"],
+    )
+    table.add_column("", width=2, justify="center")
+    table.add_column("PID", justify="right", style=THEME["accent"], width=5)
+    table.add_column("NAME", style=THEME["fg"], min_width=14, max_width=18, no_wrap=True)
+    table.add_column("STATE", width=12)
+    table.add_column("PRIO", justify="right", width=4)
+    table.add_column("STACK", justify="right", width=7)
+    table.add_column("", width=4)
+
+    max_rows = 18
+    for idx, task in enumerate(tasks_to_show[:max_rows]):
         pid = task.get("pid", 0)
-        name = task.get("name", "unknown")
+        name = task.get("name", "?")
+        stack = task.get("stack_hwm", task.get("mem", 0))
         protected = is_protected_task(task)
+        is_selected = idx == sel
+        is_pending = pending_pid is not None and pid == pending_pid
 
-        marker = " "
+        if is_pending:
+            marker = Text("◌", style=f"blink {THEME['warn']}")
+        elif is_selected:
+            marker = Text("▸", style=f"bold {THEME['accent']}")
+        else:
+            marker = Text(" ", style=THEME["dim"])
+
+        lock = Text("🔒", style=THEME["dim"]) if protected else Text("  ")
+
         row_style = None
-        if idx == sel:
-            marker = "▶"
-            row_style = "bold reverse"
-        if pending_pid is not None and pid == pending_pid:
-            marker = "⏳"
-            row_style = "bold yellow"
-
-        state_str = task.get("state", "?")
-        prio = task.get("priority", "?")
-        user = task.get("user", "system")
-        if protected:
-            user = "[dim]system[/]"
+        if is_selected:
+            row_style = f"bold {THEME['select_fg']} on {THEME['select_bg']}"
+        elif is_pending:
+            row_style = f"bold {THEME['warn']} on grey19"
 
         table.add_row(
             marker,
             str(pid),
-            name,
-            state_str,
-            str(prio),
-            f"{stack // 1024}K" if stack >= 1024 else f"{stack}B",
-            f"{mem // 1024}K" if mem >= 1024 else f"{mem}B",
-            user,
+            name[:18],
+            state_badge(task.get("state", "?")),
+            str(task.get("priority", "?")),
+            fmt_size(stack) if stack >= 1024 else f"{stack}B",
+            lock,
             style=row_style,
         )
 
-    subtitle_parts = [f"{len(tasks_to_show)}/{len(all_tasks)}"]
-    if confirm and pending_name:
-        subtitle_parts.append(f"[bold red]Kill {pending_name} (pid {pending_pid})? [Y] confirm [N/Esc] cancel[/]")
-    elif pending_pid is not None and not confirm:
-        subtitle_parts.append(f"[yellow]pending kill pid {pending_pid}…[/]")
+    summary = task_state_summary(all_tasks)
+    filter_label = "all" if show_all_tasks else "user"
+    title_extra = f"{len(tasks_to_show)}/{len(all_tasks)} shown · {filter_label} · {task_count} total"
 
-    return Panel(
-        table,
-        title="[bold]proc[/] [dim]↑↓ select │ K kill │ A all │ S pause │ Q quit[/]",
+    proc_body = Group(table, Text(""))
+
+    panel = Panel(
+        proc_body,
+        title=panel_title("☰", "proc", title_extra),
+        subtitle=Align.left(summary),
         box=box.ROUNDED,
-        border_style="yellow",
+        border_style=THEME["proc"],
         title_align="left",
-        subtitle=" │ ".join(subtitle_parts),
-        subtitle_align="right",
+        padding=(0, 0),
     )
+
+    if confirm:
+        overlay = create_kill_overlay()
+        if overlay:
+            return Group(
+                panel,
+                Align.center(overlay),
+            )
+
+    return panel
 
 
 def create_header():
     with state_lock:
         is_paused = paused
-        all_tasks_on = show_all_tasks
+        all_on = show_all_tasks
         msg = status_message
         msg_until = status_message_until
 
-    status = "[green]●[/]" if not is_paused else "[red]●[/]"
-    time_str = time.strftime("%H:%M:%S")
-    all_tasks_status = "[green]ON[/]" if all_tasks_on else "[dim]OFF[/]"
+    now = time.time()
+    linked = (now - last_telemetry_at) < 3.0 if last_telemetry_at else False
+    link_style = THEME["ok"] if linked else THEME["danger"]
+    link_label = "LINK" if linked else "NO DATA"
 
-    status_line = ""
-    if msg and time.time() < msg_until:
-        status_line = f"  │  {msg}"
+    status_dot = f"[{THEME['danger']}]● PAUSED[/]" if is_paused else f"[{THEME['ok']}]● LIVE[/]"
+    tasks_mode = f"[{THEME['accent']}]ALL[/]" if all_on else f"[{THEME['dim']}]USER[/]"
+
+    left = Text.assemble(
+        ("  ◈ ", THEME["accent"]),
+        ("ESP32", f"bold {THEME['fg']}"),
+        (" MONITOR", THEME["dim"]),
+    )
+
+    center = Text.assemble(
+        (" ↑↓ ", THEME["dim"]),
+        ("sel", THEME["fg"]),
+        (" │ ", THEME["dim"]),
+        ("K", THEME["accent"]),
+        (" kill ", THEME["dim"]),
+        ("│ ", THEME["dim"]),
+        ("A", THEME["accent"]),
+        (f" {tasks_mode} ", THEME["dim"]),
+        ("│ ", THEME["dim"]),
+        ("S", THEME["accent"]),
+        (" pause ", THEME["dim"]),
+        ("│ ", THEME["dim"]),
+        ("Q", THEME["accent"]),
+        (" quit", THEME["dim"]),
+    )
+
+    right = Text.assemble(
+        (f" {link_label} ", link_style),
+        ("│ ", THEME["dim"]),
+        (status_dot, ""),
+        (" │ ", THEME["dim"]),
+        (time.strftime("%H:%M:%S"), THEME["accent"]),
+    )
+
+    bar = Columns([left, center, right], expand=True, equal=False)
+
+    content = bar
+    if msg and now < msg_until:
+        content = Group(bar, Text(f"  › {msg}", style=THEME["fg"]))
 
     return Panel(
-        f" [bold]↑↓[/] select [bold]K[/] kill [bold]Y[/] confirm [bold]A[/] alltasks [bold]S[/] pause [bold]Q[/] quit"
-        f"  │  AllTasks:{all_tasks_status}  │  {status} {'PAUSED' if is_paused else 'RUNNING'}"
-        f"  │  [cyan]{time_str}[/]{status_line}",
+        content,
         box=box.HEAVY,
-        style="white on black",
-        title="[bold cyan]ESP32 Monitor[/]",
-        title_align="left",
+        style=f"{THEME['fg']} on {THEME['header_bg']}",
+        padding=(0, 0),
+    )
+
+
+def create_footer():
+    age = ""
+    if last_telemetry_at:
+        age = f" │ last frame {time.time() - last_telemetry_at:.1f}s ago"
+
+    return Panel(
+        Text.assemble(
+            (f" {PORT}", THEME["dim"]),
+            (" │ ", THEME["dim"]),
+            (f"{BAUD} baud", THEME["dim"]),
+            (" │ ", THEME["dim"]),
+            (f"{throughput_rate:.2f} KB/s", THEME["net"]),
+            (age, THEME["dim"]),
+            (" │ ", THEME["dim"]),
+            ("rich tui", THEME["dim"]),
+        ),
+        box=box.SQUARE,
+        style=f"on {THEME['bg']}",
+        padding=(0, 0),
     )
 
 
 def build_btop_layout(data):
-    layout = Layout()
+    layout = Layout(name="root")
     layout.split_column(
-        Layout(name="header", size=3),
+        Layout(name="header", size=4),
         Layout(name="body"),
         Layout(name="footer", size=1),
     )
 
     layout["body"].split_row(
-        Layout(name="left", ratio=1),
-        Layout(name="right", ratio=1),
+        Layout(name="left", ratio=5),
+        Layout(name="right", ratio=6),
     )
 
     layout["left"].split_column(
-        Layout(name="cpu", size=12),
+        Layout(name="cpu", size=16),
         Layout(name="bottom_left"),
     )
 
     layout["bottom_left"].split_row(
-        Layout(name="mem"),
-        Layout(name="net"),
+        Layout(name="mem", ratio=1),
+        Layout(name="net", ratio=1),
     )
 
-    layout["right"].update(create_tasks_panel(data))
-    layout["header"].update(create_header())
-    layout["footer"].update(
-        Text.from_markup(f"[dim]Port: {PORT} │ Baud: {BAUD} │ Rate: {throughput_rate:.2f} KB/s[/]")
+    layout["right"].split_column(
+        Layout(name="proc", ratio=3),
+        Layout(name="detail", size=7),
     )
+
+    layout["header"].update(create_header())
+    layout["footer"].update(create_footer())
+    layout["right"]["proc"].update(create_tasks_panel(data))
+    layout["right"]["detail"].update(selected_task_detail(data))
 
     with state_lock:
         is_paused = paused
 
     if is_paused:
-        layout["cpu"].update(Panel("[bold red]⏸ PAUSED[/] - Press S to resume", title="cpu", box=box.ROUNDED, border_style="red"))
-        layout["mem"].update(Panel("[dim]Paused[/]", title="mem", box=box.ROUNDED, border_style="dim"))
-        layout["net"].update(Panel("[dim]Paused[/]", title="net", box=box.ROUNDED, border_style="dim"))
+        paused_panel = lambda t, c: Panel(
+            Align.center(Text("⏸  PAUSED", style=f"bold {THEME['danger']}"), vertical="middle"),
+            title=panel_title("⏸", t),
+            box=box.ROUNDED,
+            border_style=c,
+        )
+        layout["left"]["cpu"].update(paused_panel("cpu", THEME["cpu"]))
+        layout["left"]["mem"].update(paused_panel("mem", THEME["mem"]))
+        layout["left"]["net"].update(paused_panel("net", THEME["net"]))
     elif not data:
-        layout["cpu"].update(Panel("[yellow]Waiting for ESP32...[/]", title="cpu", box=box.ROUNDED, border_style="yellow"))
-        layout["mem"].update(Panel("[dim]No data[/]", title="mem", box=box.ROUNDED, border_style="dim"))
-        layout["net"].update(Panel("[dim]No data[/]", title="net", box=box.ROUNDED, border_style="dim"))
+        waiting = lambda t, c: Panel(
+            Align.center(Text("waiting…", style=THEME["dim"]), vertical="middle"),
+            title=panel_title("…", t),
+            box=box.ROUNDED,
+            border_style=c,
+        )
+        layout["left"]["cpu"].update(waiting("cpu", THEME["warn"]))
+        layout["left"]["mem"].update(waiting("mem", THEME["dim"]))
+        layout["left"]["net"].update(waiting("net", THEME["dim"]))
     else:
-        layout["cpu"].update(create_cpu_panel(data))
-        layout["mem"].update(create_memory_panel(data))
-        layout["net"].update(create_network_panel(data))
+        layout["left"]["cpu"].update(create_cpu_panel(data))
+        layout["left"]["mem"].update(create_memory_panel(data))
+        layout["left"]["net"].update(create_network_panel(data))
 
     return layout
 
@@ -375,7 +724,7 @@ def serial_worker(ser):
         try:
             raw = ser.readline()
         except serial.SerialException as exc:
-            set_status(f"[red]Serial error: {exc}[/]")
+            set_status(f"[{THEME['danger']}]Serial error: {exc}[/]")
             with state_lock:
                 running = False
             break
@@ -391,10 +740,10 @@ def serial_worker(ser):
         if payload.get("ack") == "kill":
             pid = payload.get("pid", "?")
             if payload.get("ok"):
-                set_status(f"[green]Kill ack: pid {pid} deleted[/]")
+                set_status(f"[{THEME['ok']}]✓ killed pid {pid}[/]", duration=5)
             else:
                 reason = payload.get("reason", "rejected")
-                set_status(f"[red]Kill rejected pid {pid}: {reason}[/]")
+                set_status(f"[{THEME['danger']}]✗ kill rejected ({reason})[/]", duration=6)
             with state_lock:
                 pending_kill_pid = None
                 pending_kill_name = None
@@ -419,7 +768,7 @@ def keyboard_worker():
         try:
             import msvcrt
         except ImportError:
-            set_status("[yellow]Keyboard input unavailable on this platform[/]")
+            set_status(f"[{THEME['warn']}]Keyboard unavailable on this platform[/]")
             return
 
         while True:
@@ -427,8 +776,7 @@ def keyboard_worker():
                 if not running:
                     break
             if msvcrt.kbhit():
-                ch = msvcrt.getwch()
-                _handle_key(ch, msvcrt)
+                _handle_key(msvcrt.getwch())
             else:
                 time.sleep(0.05)
         return
@@ -454,7 +802,6 @@ def keyboard_worker():
                 elif seq == "[B":
                     _move_selection(1)
                 continue
-
             _handle_key(ch)
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
@@ -466,10 +813,10 @@ def _move_selection(delta):
         tasks = visible_tasks(last_data)
         if not tasks:
             return
-        selected_index = max(0, min(selected_index + delta, len(tasks[:15]) - 1))
+        selected_index = max(0, min(selected_index + delta, len(tasks[:18]) - 1))
 
 
-def _handle_key(ch, msvcrt_mod=None):
+def _handle_key(ch):
     global running, paused, show_all_tasks, selected_index
     global kill_confirm, pending_kill_pid, pending_kill_name
 
@@ -485,15 +832,18 @@ def _handle_key(ch, msvcrt_mod=None):
         if key in ("y", "Y"):
             if pending_pid is not None:
                 command_queue.put({"cmd": "kill", "pid": pending_pid})
-                set_status(f"[yellow]Sending kill for pid {pending_pid} ({pending_name})…[/]", duration=8.0)
+                set_status(
+                    f"[{THEME['warn']}]sending kill → {pending_name} (pid {pending_pid})…[/]",
+                    duration=8,
+                )
             with state_lock:
                 kill_confirm = False
-        elif key in ("n", "q", "\x1b") or key.lower() == "n":
+        elif key in ("n", "\x1b") or key == "q":
             with state_lock:
                 kill_confirm = False
                 pending_kill_pid = None
                 pending_kill_name = None
-            set_status("[dim]Kill cancelled[/]")
+            set_status(f"[{THEME['dim']}]kill cancelled[/]")
         return
 
     if key == "a":
@@ -506,22 +856,23 @@ def _handle_key(ch, msvcrt_mod=None):
     elif key == "q":
         with state_lock:
             running = False
-    elif key in ("k", "K"):
+    elif key == "k":
         if not tasks:
-            set_status("[yellow]No task selected[/]")
+            set_status(f"[{THEME['warn']}]no task selected[/]")
             return
-        idx = min(selected_index, len(tasks[:15]) - 1)
+        idx = min(selected_index, len(tasks[:18]) - 1)
         task = tasks[idx]
         if is_protected_task(task):
-            set_status(f"[red]Cannot kill protected task: {task.get('name')}[/]")
+            set_status(f"[{THEME['danger']}]protected: {task.get('name')}[/]")
             return
-        task_pid = task.get("pid")
-        task_name = task.get("name")
         with state_lock:
-            pending_kill_pid = task_pid
-            pending_kill_name = task_name
+            pending_kill_pid = task.get("pid")
+            pending_kill_name = task.get("name")
             kill_confirm = True
-        set_status(f"[bold yellow]Confirm kill {task_name} (pid {task_pid})? Press Y[/]")
+        set_status(
+            f"[{THEME['warn']}]confirm kill → {task.get('name')} (pid {task.get('pid')})[/]",
+            duration=10,
+        )
 
 
 def main():
@@ -530,8 +881,8 @@ def main():
     try:
         ser = serial.Serial(PORT, BAUD, timeout=0.1)
     except serial.SerialException as exc:
-        console.print(f"[red]Error opening serial port: {exc}[/]")
-        console.print(f"[yellow]Make sure the ESP32 is connected to {PORT}[/]")
+        console.print(f"[{THEME['danger']}]serial open failed:[/] {exc}")
+        console.print(f"[{THEME['dim']}]expected device:[/] {PORT}")
         return
 
     io_thread = threading.Thread(target=serial_worker, args=(ser,), daemon=True)
@@ -542,7 +893,13 @@ def main():
     console.clear()
 
     try:
-        with Live(build_btop_layout(last_data), refresh_per_second=10, console=console, screen=True) as live:
+        with Live(
+            build_btop_layout(last_data),
+            refresh_per_second=15,
+            console=console,
+            screen=True,
+            transient=False,
+        ) as live:
             while True:
                 with state_lock:
                     if not running:
@@ -558,7 +915,7 @@ def main():
                         snapshot = item["data"]
 
                 live.update(build_btop_layout(snapshot))
-                time.sleep(0.05)
+                time.sleep(0.04)
     except KeyboardInterrupt:
         pass
     finally:
@@ -567,8 +924,4 @@ def main():
         io_thread.join(timeout=1.0)
         ser.close()
         console.clear()
-        console.print("[green]ESP32 Monitor closed.[/]")
-
-
-if __name__ == "__main__":
-    main()
+        console.print(f"[{THEME['ok']}]monitor closed[/]")

@@ -11,9 +11,9 @@ A btop-style terminal user interface for real-time monitoring of ESP32 microcont
 - **Real-time CPU monitoring** - Frequency, dual-core usage, and uptime
 - **Memory visualization** - Heap usage with progress bars and watermark tracking
 - **Network stats** - WiFi RSSI, download/upload throughput with live graphs
-- **Task manager** - FreeRTOS task list with filtering
-- **Keyboard controls** - Interactive navigation like btop
-- **ASCII graphs** - Live updating charts for CPU and network activity
+- **Task manager** - FreeRTOS task list with state badges, detail panel, and btop-style kill flow
+- **Keyboard controls** - Interactive navigation like btop (↑↓ select, K kill, Y confirm)
+- **Braille sparklines** - Smooth live charts for CPU and memory history
 
 ## Layout
 
