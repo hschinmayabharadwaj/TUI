@@ -72,7 +72,7 @@ pip install rich pyserial
 
 ### 3. Flash the ESP32
 
-1. Open `esp.ino` in Arduino IDE
+1. Open `esp/esp.ino` in Arduino IDE
 2. Update WiFi credentials:
    ```cpp
    #define SSID "your_wifi_ssid"
@@ -105,12 +105,20 @@ python esp32_tui.py
 | Key | Action |
 |-----|--------|
 | `A` | Toggle all tasks (show/hide system tasks like IDLE) |
+| `↑` / `↓` | Select task row in proc panel |
+| `K` | Request kill for selected task (requires confirmation) |
+| `Y` | Confirm pending kill |
+| `N` / `Esc` | Cancel pending kill |
 | `S` | Stop/Start monitoring (pause/resume) |
 | `Q` | Quit the application |
 
+> **Platform note:** Arrow-key selection uses POSIX terminal raw mode (`termios`). On Windows, basic keys work via `msvcrt`; arrow keys may be limited depending on the terminal.
+
 ## JSON Data Format
 
-The ESP32 sends JSON data over serial at 115200 baud:
+The ESP32 sends newline-delimited JSON over serial at 115200 baud. Each second it emits a **telemetry** line; **command** and **ack** lines use the same framing.
+
+### Telemetry (ESP32 → host)
 
 ```json
 {
@@ -127,34 +135,92 @@ The ESP32 sends JSON data over serial at 115200 baud:
   "task_count": 8,
   "tasks": [
     {
-      "pid": 1,
-      "name": "loopTask",
-      "cmd": "arduino_loop",
+      "pid": 5,
+      "name": "demo_worker",
+      "state": "Blocked",
+      "priority": 1,
+      "stack_hwm": 1536,
+      "cmd": "demo_worker",
       "threads": 1,
       "user": "app",
-      "mem": 0,
-      "cpu": 0
+      "mem": 1536,
+      "cpu": 0,
+      "protected": false
     }
   ]
 }
 ```
 
-### Data Fields
+Task fields come from FreeRTOS `uxTaskGetSystemState()` (`TaskStatus_t`):
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `cpu_mhz` | int | Current CPU frequency in MHz |
-| `max_cpu_mhz` | int | Maximum CPU frequency (240 for ESP32) |
-| `cpu_core0` | float | Core 0 usage percentage |
-| `cpu_core1` | float | Core 1 usage percentage |
-| `heap` | int | Free heap memory in bytes |
-| `total_heap` | int | Total heap size in bytes |
-| `min_heap` | int | Minimum free heap ever (watermark) |
-| `rssi` | int | WiFi signal strength in dBm |
-| `tx_rate` | float | Upload rate in KB/s |
-| `uptime_ms` | int | System uptime in milliseconds |
-| `task_count` | int | Number of FreeRTOS tasks |
-| `tasks` | array | List of task objects |
+| `pid` | int | FreeRTOS task number (`xTaskNumber`) |
+| `name` | string | Task name |
+| `state` | string | `Running`, `Ready`, `Blocked`, `Suspended`, `Deleted`, `Invalid` |
+| `priority` | int | Current priority |
+| `stack_hwm` | int | Stack high-water mark in **bytes** (`usStackHighWaterMark × 4` on ESP32) |
+| `protected` | bool | `true` if the task is on the firmware deny-list |
+| `cmd`, `threads`, `user`, `mem`, `cpu` | — | Legacy/display fields kept for backward compatibility |
+
+### Commands (host → ESP32)
+
+One JSON object per line, terminated with `\n`:
+
+```json
+{"cmd":"kill","pid":5}
+```
+
+Kill by name is also supported:
+
+```json
+{"cmd":"kill","name":"demo_worker"}
+```
+
+### Acknowledgements (ESP32 → host)
+
+```json
+{"ack":"kill","pid":5,"ok":true}
+```
+
+Rejected kill (firmware is the trust boundary):
+
+```json
+{"ack":"kill","pid":1,"ok":false,"reason":"protected task"}
+```
+
+Other rejection reasons: `task not found`, `missing pid or name`, `unknown command`.
+
+### Protected task deny-list (firmware enforced)
+
+These tasks **cannot** be killed via `vTaskDelete` — doing so can hang or crash the chip:
+
+| Task name |
+|-----------|
+| `IDLE`, `IDLE0`, `IDLE1` |
+| `ipc0`, `ipc1` |
+| `Tmr Svc` |
+| `wifi` |
+| `loopTask` |
+| `esp_timer` |
+
+The Python UI also blocks selecting protected tasks for kill, but enforcement happens on the ESP32.
+
+**Killable tasks in practice:** only user workloads created in the sketch with `xTaskCreate` (e.g. the bundled `demo_worker` and `demo_blink` demo tasks). Do not attempt to kill core runtime tasks.
+
+## Python client architecture
+
+`esp32_tui.py` runs three concurrent responsibilities:
+
+1. **Serial I/O thread** — blocking `readline()`, pushes telemetry/acks onto a queue, drains an outgoing command queue.
+2. **Keyboard thread** — non-blocking key capture; `K` → confirm with `Y` btop-style kill flow.
+3. **Render loop (main thread)** — drains telemetry, updates Rich `Live` UI, shows pending-kill and ack/reject status in the header.
+
+`dashboard.py` is a simpler alternate viewer with the same serial-thread pattern and extended task columns.
+
+## Requirements (FreeRTOS)
+
+Real task enumeration requires `configUSE_TRACE_FACILITY 1` and `configRECORD_STACK_HIGH_ADDRESS 1`. These are enabled by default on the ESP32 Arduino core; the sketch fails at compile time if trace facility is off.
 
 ## Customization
 
@@ -207,7 +273,7 @@ sudo usermod -a -G dialout $USER
 1. Verify ESP32 is connected and powered
 2. Check baud rate matches (115200)
 3. Open Arduino Serial Monitor to verify ESP32 is sending data
-4. Ensure WiFi credentials are correct in `esp.ino`
+4. Ensure WiFi credentials are correct in `esp/esp.ino`
 
 ### externally-managed-environment error
 
@@ -222,8 +288,10 @@ pip install rich pyserial
 
 ```
 TUI/
-├── esp32_tui.py    # Python TUI application
-├── esp.ino         # ESP32 Arduino sketch
+├── esp32_tui.py    # Full btop-style TUI (serial + keyboard + render threads)
+├── dashboard.py    # Simpler dashboard with serial thread
+├── esp/
+│   └── esp.ino     # ESP32 Arduino sketch (telemetry + kill commands)
 ├── venv/           # Python virtual environment
 └── README.md       # This file
 ```
