@@ -1,317 +1,371 @@
 #include <WiFi.h>
-#include <cstring>
+#include <Arduino.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "esp_system.h"
-#include "esp_wifi.h"
 
-#define SSID "ssid"
-#define PASSWORD "pass"
-
-#ifndef configUSE_TRACE_FACILITY
-#define configUSE_TRACE_FACILITY 0
+#ifndef WIFI_SSID
+#define WIFI_SSID "Airtel_shiv_7160"
+#endif
+#ifndef WIFI_PASS
+#define WIFI_PASS "Air@29269"
 #endif
 
-#if !configUSE_TRACE_FACILITY
-#error "configUSE_TRACE_FACILITY must be 1 (enabled by default on ESP32 Arduino core)"
-#endif
+#define SEND_INTERVAL_MS 1000
+#define MAX_TASKS 40
+#define LINE_MAX 256
 
-static const char* PROTECTED_TASKS[] = {
-  "IDLE", "IDLE0", "IDLE1", "ipc0", "ipc1",
-  "Tmr Svc", "wifi", "loopTask", "esp_timer"
-};
-static const size_t PROTECTED_TASK_COUNT = sizeof(PROTECTED_TASKS) / sizeof(PROTECTED_TASKS[0]);
+static const char *PROTECTED_TASKS[] = {
+    "IDLE", "IDLE0", "IDLE1", "ipc0", "ipc1", "Tmr Svc",
+    "wifi", "wifiN", "loopTask", "esp_timer", "sys_evt",
+    "arduino_events", "tiT", NULL};
 
-#define MAX_TRACKED_TASKS 48
+static uint32_t prev_idle0 = 0;
+static uint32_t prev_idle1 = 0;
+static uint32_t prev_total = 0;
+static unsigned long last_send = 0;
+static TaskHandle_t h_demo_worker = NULL;
+static TaskHandle_t h_demo_blink = NULL;
 
-struct TaskEntry {
-  TaskHandle_t handle;
-  UBaseType_t number;
-  char name[configMAX_TASK_NAME_LEN];
-};
+static int task_pid_from_handle(TaskHandle_t handle) {
+  if (!handle) {
+    return -1;
+  }
+  return (int)((((uintptr_t)handle) >> 4) & 0x7FFF);
+}
 
-static TaskEntry task_table[MAX_TRACKED_TASKS];
-static size_t task_table_count = 0;
-
-static bool str_iequals(const char* a, const char* b) {
+static bool name_eq(const char *a, const char *b) {
+  if (!a || !b) return false;
   while (*a && *b) {
-    char ca = (*a >= 'A' && *a <= 'Z') ? (*a + 32) : *a;
-    char cb = (*b >= 'A' && *b <= 'Z') ? (*b + 32) : *b;
+    char ca = (*a >= 'A' && *a <= 'Z') ? (char)(*a + 32) : *a;
+    char cb = (*b >= 'A' && *b <= 'Z') ? (char)(*b + 32) : *b;
     if (ca != cb) return false;
-    a++;
-    b++;
+    a++; b++;
   }
   return *a == *b;
 }
 
-static bool is_protected_task(const char* name) {
-  for (size_t i = 0; i < PROTECTED_TASK_COUNT; i++) {
-    if (str_iequals(name, PROTECTED_TASKS[i])) return true;
+static bool is_protected_name(const char *name) {
+  for (int i = 0; PROTECTED_TASKS[i]; i++) {
+    if (name_eq(name, PROTECTED_TASKS[i])) return true;
   }
   return false;
 }
 
-static const char* task_state_str(eTaskState state) {
+static const char *state_name(eTaskState state) {
   switch (state) {
     case eRunning: return "Running";
     case eReady: return "Ready";
     case eBlocked: return "Blocked";
     case eSuspended: return "Suspended";
     case eDeleted: return "Deleted";
-    case eInvalid: return "Invalid";
-    default: return "Unknown";
+    default: return "Invalid";
   }
 }
 
-static void json_escape_print(const char* s) {
-  Serial.print('"');
-  for (const char* p = s; *p; p++) {
-    char c = *p;
-    if (c == '"' || c == '\\') {
-      Serial.print('\\');
-      Serial.print(c);
-    } else if (c >= 32 && c < 127) {
-      Serial.print(c);
-    } else {
-      Serial.print('?');
+static void json_escape(const char *s) {
+  for (; s && *s; s++) {
+    if (*s == '"' || *s == '\\') {
+      Serial.write('\\');
+      Serial.write(*s);
+    } else if (*s == '\n') {
+      Serial.print("\\n");
+    } else if ((unsigned char)*s >= 32) {
+      Serial.write(*s);
     }
   }
-  Serial.print('"');
 }
 
-static void rebuild_task_table(TaskStatus_t* status, UBaseType_t count) {
-  task_table_count = 0;
-  for (UBaseType_t i = 0; i < count && task_table_count < MAX_TRACKED_TASKS; i++) {
-    TaskEntry* entry = &task_table[task_table_count];
-    entry->handle = status[i].xHandle;
-    entry->number = status[i].xTaskNumber;
-    strncpy(entry->name, status[i].pcTaskName ? status[i].pcTaskName : "?", configMAX_TASK_NAME_LEN - 1);
-    entry->name[configMAX_TASK_NAME_LEN - 1] = '\0';
-    task_table_count++;
-  }
-}
-
-static TaskHandle_t lookup_task_handle(UBaseType_t pid, const char* name, bool by_name) {
-  for (size_t i = 0; i < task_table_count; i++) {
-    if (by_name) {
-      if (name && str_iequals(task_table[i].name, name)) {
-        return task_table[i].handle;
-      }
-    } else if (task_table[i].number == pid) {
-      return task_table[i].handle;
-    }
-  }
-  return NULL;
-}
-
-static const char* lookup_task_name(UBaseType_t pid) {
-  for (size_t i = 0; i < task_table_count; i++) {
-    if (task_table[i].number == pid) return task_table[i].name;
-  }
-  return NULL;
-}
-
-static void send_kill_ack(UBaseType_t pid, bool ok, const char* reason) {
+static void print_ack(int pid, bool ok, const char *reason) {
   Serial.print("{\"ack\":\"kill\",\"pid\":");
   Serial.print(pid);
   Serial.print(",\"ok\":");
   Serial.print(ok ? "true" : "false");
-  if (reason && reason[0]) {
-    Serial.print(",\"reason\":");
-    json_escape_print(reason);
+  if (!ok && reason) {
+    Serial.print(",\"reason\":\"");
+    json_escape(reason);
+    Serial.print("\"");
   }
   Serial.println("}");
 }
 
-static int parse_json_int(const String& line, const char* key) {
+static int json_int(const String &line, const char *key, int fallback) {
   String needle = String("\"") + key + "\":";
   int idx = line.indexOf(needle);
-  if (idx < 0) return -1;
+  if (idx < 0) return fallback;
   idx += needle.length();
-  while (idx < (int)line.length() && (line[idx] == ' ' || line[idx] == '\t')) idx++;
+  while (idx < (int)line.length() && line[idx] == ' ') idx++;
   return line.substring(idx).toInt();
 }
 
-static bool parse_json_string(const String& line, const char* key, char* out, size_t out_len) {
+static String json_string(const String &line, const char *key) {
   String needle = String("\"") + key + "\":\"";
   int idx = line.indexOf(needle);
-  if (idx < 0) return false;
+  if (idx < 0) return "";
   idx += needle.length();
   int end = line.indexOf('"', idx);
-  if (end < 0) return false;
-  String value = line.substring(idx, end);
-  strncpy(out, value.c_str(), out_len - 1);
-  out[out_len - 1] = '\0';
-  return true;
+  if (end < 0) return "";
+  return line.substring(idx, end);
 }
 
-static void handle_command(const String& line) {
-  String trimmed = line;
-  trimmed.trim();
-  if (trimmed.length() == 0 || trimmed.charAt(0) != '{') return;
-
-  char cmd[32] = {0};
-  if (!parse_json_string(trimmed, "cmd", cmd, sizeof(cmd))) return;
-
-  if (strcmp(cmd, "kill") != 0) {
-    Serial.print("{\"ack\":\"");
-    Serial.print(cmd);
-    Serial.println("\",\"ok\":false,\"reason\":\"unknown command\"}");
-    return;
-  }
-
-  char name[configMAX_TASK_NAME_LEN] = {0};
-  bool by_name = parse_json_string(trimmed, "name", name, sizeof(name));
-  int pid = parse_json_int(trimmed, "pid");
-  if (!by_name && pid < 0) {
-    send_kill_ack(0, false, "missing pid or name");
-    return;
-  }
-
-  UBaseType_t target_pid = by_name ? 0 : (UBaseType_t)pid;
-  const char* target_name = by_name ? name : lookup_task_name(target_pid);
-  if (by_name) {
-    for (size_t i = 0; i < task_table_count; i++) {
-      if (str_iequals(task_table[i].name, name)) {
-        target_pid = task_table[i].number;
-        break;
-      }
+static TaskHandle_t find_task(int pid, const char *name, char *found_name, size_t found_len, bool *protected_out) {
+  static const char *known[] = {
+      "demo_worker", "demo_blink", "loopTask", "IDLE", "IDLE0", "IDLE1",
+      "ipc0", "ipc1", "Tmr Svc", "wifi", "wifiN", "tiT", "esp_timer",
+      "sys_evt", "arduino_events", "sysWdt", NULL};
+  TaskHandle_t extras[] = {h_demo_worker, h_demo_blink, xTaskGetCurrentTaskHandle(), NULL};
+  TaskHandle_t candidates[MAX_TASKS];
+  int count = 0;
+  for (int i = 0; known[i] && count < MAX_TASKS; i++) {
+    TaskHandle_t h = xTaskGetHandle(known[i]);
+    if (h) {
+      candidates[count++] = h;
     }
   }
-  if (!target_name) {
-    send_kill_ack(target_pid, false, "task not found");
+  for (int i = 0; extras[i] && count < MAX_TASKS; i++) {
+    candidates[count++] = extras[i];
+  }
+#if (configUSE_TRACE_FACILITY == 1)
+  {
+    UBaseType_t n = uxTaskGetNumberOfTasks();
+    if (n > MAX_TASKS) n = MAX_TASKS;
+    TaskStatus_t *arr = (TaskStatus_t *)pvPortMalloc(n * sizeof(TaskStatus_t));
+    if (arr) {
+      n = uxTaskGetSystemState(arr, n, NULL);
+      for (UBaseType_t i = 0; i < n && count < MAX_TASKS; i++) {
+        candidates[count++] = arr[i].xHandle;
+      }
+      vPortFree(arr);
+    }
+  }
+#endif
+  for (int i = 0; i < count; i++) {
+    TaskHandle_t handle = candidates[i];
+    if (!handle) {
+      continue;
+    }
+    const char *tn = pcTaskGetName(handle);
+    bool match = false;
+    if (pid >= 0 && task_pid_from_handle(handle) == pid) {
+      match = true;
+    }
+    if (name && name[0] && name_eq(tn, name)) {
+      match = true;
+    }
+    if (match) {
+      if (found_name && found_len && tn) {
+        strncpy(found_name, tn, found_len - 1);
+        found_name[found_len - 1] = 0;
+      }
+      if (protected_out) {
+        *protected_out = is_protected_name(tn);
+      }
+      return handle;
+    }
+  }
+  return NULL;
+}
+
+static void handle_command(const String &line) {
+  if (line.indexOf("\"cmd\"") < 0 || line.indexOf("kill") < 0) {
+    print_ack(-1, false, "unknown command");
     return;
   }
-
-  if (is_protected_task(target_name)) {
-    send_kill_ack(target_pid, false, "protected task");
+  int pid = json_int(line, "pid", -1);
+  String name = json_string(line, "name");
+  if (pid < 0 && name.length() == 0) {
+    print_ack(-1, false, "missing pid or name");
     return;
   }
-
-  TaskHandle_t handle = lookup_task_handle(target_pid, name, by_name);
-  if (handle == NULL) {
-    send_kill_ack(target_pid, false, "task not found");
+  char found[configMAX_TASK_NAME_LEN + 1] = {0};
+  bool protected_task = false;
+  TaskHandle_t handle = find_task(pid, name.c_str(), found, sizeof(found), &protected_task);
+  if (!handle) {
+    print_ack(pid, false, "task not found");
     return;
   }
-
+  if (protected_task || is_protected_name(found) || handle == xTaskGetCurrentTaskHandle()) {
+    print_ack(pid >= 0 ? pid : 0, false, "protected task");
+    return;
+  }
   vTaskDelete(handle);
-  send_kill_ack(target_pid, true, NULL);
+  print_ack(pid >= 0 ? pid : 0, true, NULL);
 }
 
-static void demo_worker(void* param) {
+static void poll_commands() {
+  static char buf[LINE_MAX];
+  static size_t len = 0;
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\n' || c == '\r') {
+      if (len > 0) {
+        buf[len] = 0;
+        String line(buf);
+        line.trim();
+        if (line.length() && line[0] == '{') handle_command(line);
+        len = 0;
+      }
+    } else if (len + 1 < sizeof(buf)) {
+      buf[len++] = c;
+    } else {
+      len = 0;
+    }
+  }
+}
+
+static void demo_worker(void *param) {
   (void)param;
-  while (true) {
-    vTaskDelay(pdMS_TO_TICKS(2000));
+  for (;;) vTaskDelay(pdMS_TO_TICKS(400));
+}
+
+static void demo_blink(void *param) {
+  (void)param;
+  for (;;) vTaskDelay(pdMS_TO_TICKS(750));
+}
+
+static void emit_task(bool *first, int pid, const char *name, const char *state,
+                      int priority, uint32_t stack_bytes, uint32_t cpu_pct) {
+  if (!name || !name[0]) return;
+  if (!*first) Serial.print(",");
+  *first = false;
+  bool prot = is_protected_name(name);
+  Serial.print("{\"pid\":");
+  Serial.print(pid);
+  Serial.print(",\"name\":\"");
+  json_escape(name);
+  Serial.print("\",\"state\":\"");
+  json_escape(state ? state : "?");
+  Serial.print("\",\"priority\":");
+  Serial.print(priority);
+  Serial.print(",\"stack_hwm\":");
+  Serial.print(stack_bytes);
+  Serial.print(",\"cmd\":\"");
+  json_escape(name);
+  Serial.print("\",\"threads\":1,\"user\":\"");
+  Serial.print(prot ? "system" : "app");
+  Serial.print("\",\"mem\":");
+  Serial.print(stack_bytes);
+  Serial.print(",\"cpu\":");
+  Serial.print(cpu_pct);
+  Serial.print(",\"protected\":");
+  Serial.print(prot ? "true" : "false");
+  Serial.print("}");
+}
+
+static void emit_task_from_handle(bool *first, TaskHandle_t handle) {
+  if (!handle) return;
+  const char *name = pcTaskGetName(handle);
+  if (!name) return;
+  uint32_t stack_bytes = uxTaskGetStackHighWaterMark(handle) * sizeof(StackType_t);
+  emit_task(first, task_pid_from_handle(handle), name, state_name(eTaskGetState(handle)),
+            (int)uxTaskPriorityGet(handle), stack_bytes, 0);
+}
+
+static void emit_tasks_by_handle(bool *first) {
+  static const char *known[] = {
+      "demo_worker", "demo_blink", "loopTask", "IDLE", "IDLE0", "IDLE1",
+      "ipc0", "ipc1", "Tmr Svc", "wifi", "wifiN", "tiT", "esp_timer",
+      "sys_evt", "arduino_events", "sysWdt", NULL};
+  emit_task_from_handle(first, h_demo_worker);
+  emit_task_from_handle(first, h_demo_blink);
+  emit_task_from_handle(first, xTaskGetCurrentTaskHandle());
+  for (int i = 0; known[i]; i++) {
+    emit_task_from_handle(first, xTaskGetHandle(known[i]));
   }
 }
 
-void publish_metrics() {
-  uint32_t freeHeap = ESP.getFreeHeap();
-  uint32_t minHeap = ESP.getMinFreeHeap();
-  uint32_t totalHeap = ESP.getHeapSize();
-  uint32_t cpuFreq = getCpuFrequencyMhz();
-  uint32_t uptime = millis();
-  int rssi = WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0;
-  UBaseType_t taskCount = uxTaskGetNumberOfTasks();
+static void publish_metrics() {
+  uint32_t free_heap = ESP.getFreeHeap();
+  uint32_t min_heap = ESP.getMinFreeHeap();
+  uint32_t total_heap = ESP.getHeapSize();
+  uint32_t cpu_mhz = getCpuFrequencyMhz();
+  int rssi = (WiFi.status() == WL_CONNECTED) ? WiFi.RSSI() : 0;
+  uint32_t psram = ESP.getPsramSize();
+  uint32_t psram_free = ESP.getFreePsram();
+  float temp_c = 0;
+#if defined(CONFIG_IDF_TARGET_ESP32)
+  temp_c = temperatureRead();
+#endif
+  float core0 = 0, core1 = 0;
+  TaskStatus_t *arr = NULL;
+  UBaseType_t filled = 0;
+  uint32_t total_runtime = 0;
 
-  TaskStatus_t* taskStatusArray = (TaskStatus_t*)malloc(taskCount * sizeof(TaskStatus_t));
-  UBaseType_t captured = 0;
-  if (taskStatusArray != NULL) {
-    captured = uxTaskGetSystemState(taskStatusArray, taskCount, NULL);
-    rebuild_task_table(taskStatusArray, captured);
+#if (configUSE_TRACE_FACILITY == 1)
+  UBaseType_t n = uxTaskGetNumberOfTasks();
+  if (n > MAX_TASKS) n = MAX_TASKS;
+  arr = (TaskStatus_t *)pvPortMalloc(n * sizeof(TaskStatus_t));
+  if (arr) {
+    uint32_t idle0 = 0, idle1 = 0;
+    filled = uxTaskGetSystemState(arr, n, &total_runtime);
+    for (UBaseType_t i = 0; i < filled; i++) {
+      if (name_eq(arr[i].pcTaskName, "IDLE0") || name_eq(arr[i].pcTaskName, "IDLE")) idle0 += arr[i].ulRunTimeCounter;
+      else if (name_eq(arr[i].pcTaskName, "IDLE1")) idle1 += arr[i].ulRunTimeCounter;
+    }
+    if (total_runtime > 0 && prev_total > 0) {
+      uint32_t span = total_runtime > prev_total ? total_runtime - prev_total : 1;
+      uint32_t i0 = idle0 >= prev_idle0 ? idle0 - prev_idle0 : 0;
+      uint32_t i1 = idle1 >= prev_idle1 ? idle1 - prev_idle1 : 0;
+      core0 = 100.0f - (100.0f * (float)i0 / (float)span);
+      core1 = 100.0f - (100.0f * (float)i1 / (float)span);
+      if (core0 < 0) core0 = 0; if (core1 < 0) core1 = 0;
+      if (core0 > 100) core0 = 100; if (core1 > 100) core1 = 100;
+    }
+    prev_idle0 = idle0; prev_idle1 = idle1; prev_total = total_runtime;
   }
+#endif
 
   Serial.print("{");
-
-  Serial.print("\"cpu_mhz\":");
-  Serial.print(cpuFreq);
-
+  Serial.print("\"cpu_mhz\":"); Serial.print(cpu_mhz);
   Serial.print(",\"max_cpu_mhz\":240");
-
-  Serial.print(",\"cpu_core0\":0");
-  Serial.print(",\"cpu_core1\":0");
-
-  Serial.print(",\"heap\":");
-  Serial.print(freeHeap);
-
-  Serial.print(",\"total_heap\":");
-  Serial.print(totalHeap);
-
-  Serial.print(",\"min_heap\":");
-  Serial.print(minHeap);
-
-  Serial.print(",\"rssi\":");
-  Serial.print(rssi);
-
-  Serial.print(",\"tx_rate\":0");
-
-  Serial.print(",\"uptime_ms\":");
-  Serial.print(uptime);
-
-  Serial.print(",\"task_count\":");
-  Serial.print(taskCount);
-
+  Serial.print(",\"cpu_core0\":"); Serial.print(core0, 1);
+  Serial.print(",\"cpu_core1\":"); Serial.print(core1, 1);
+  Serial.print(",\"heap\":"); Serial.print(free_heap);
+  Serial.print(",\"total_heap\":"); Serial.print(total_heap);
+  Serial.print(",\"min_heap\":"); Serial.print(min_heap);
+  Serial.print(",\"rssi\":"); Serial.print(rssi);
+  Serial.print(",\"tx_rate\":0,\"rx_rate\":0");
+  Serial.print(",\"uptime_ms\":"); Serial.print(millis());
+  Serial.print(",\"chip\":\""); json_escape(ESP.getChipModel()); Serial.print("\"");
+  Serial.print(",\"flash\":"); Serial.print(ESP.getFlashChipSize());
+  Serial.print(",\"psram\":"); Serial.print(psram);
+  Serial.print(",\"psram_free\":"); Serial.print(psram_free);
+  Serial.print(",\"temp_c\":"); Serial.print(temp_c, 1);
+  Serial.print(",\"task_count\":"); Serial.print((int)uxTaskGetNumberOfTasks());
   Serial.print(",\"tasks\":[");
-  if (taskStatusArray != NULL) {
-    for (UBaseType_t i = 0; i < captured; i++) {
-      if (i > 0) Serial.print(',');
-      UBaseType_t pid = taskStatusArray[i].xTaskNumber;
-      const char* name = taskStatusArray[i].pcTaskName ? taskStatusArray[i].pcTaskName : "?";
-      uint32_t stack_bytes = (uint32_t)taskStatusArray[i].usStackHighWaterMark * sizeof(StackType_t);
-      bool protected_task = is_protected_task(name);
-
-      Serial.print("{\"pid\":");
-      Serial.print(pid);
-      Serial.print(",\"name\":");
-      json_escape_print(name);
-      Serial.print(",\"state\":");
-      json_escape_print(task_state_str(taskStatusArray[i].eCurrentState));
-      Serial.print(",\"priority\":");
-      Serial.print(taskStatusArray[i].uxCurrentPriority);
-      Serial.print(",\"stack_hwm\":");
-      Serial.print(stack_bytes);
-      Serial.print(",\"cmd\":");
-      json_escape_print(name);
-      Serial.print(",\"threads\":1,\"user\":");
-      json_escape_print(protected_task ? "system" : "app");
-      Serial.print(",\"mem\":");
-      Serial.print(stack_bytes);
-      Serial.print(",\"cpu\":0");
-      Serial.print(",\"protected\":");
-      Serial.print(protected_task ? "true" : "false");
-      Serial.print('}');
+  bool first = true;
+#if (configUSE_TRACE_FACILITY == 1)
+  if (arr && filled > 0) {
+    for (UBaseType_t i = 0; i < filled; i++) {
+      uint32_t stack_bytes = (uint32_t)arr[i].usStackHighWaterMark * sizeof(StackType_t);
+      uint32_t cpu_pct = total_runtime > 100 ? (uint32_t)(arr[i].ulRunTimeCounter / (total_runtime / 100UL)) : 0;
+      emit_task(&first, task_pid_from_handle(arr[i].xHandle), arr[i].pcTaskName,
+                state_name(arr[i].eCurrentState), (int)arr[i].uxCurrentPriority, stack_bytes, cpu_pct);
     }
   }
-  Serial.print("]");
-
-  Serial.println("}");
-
-  if (taskStatusArray != NULL) {
-    free(taskStatusArray);
+  if (arr) vPortFree(arr);
+#endif
+  if (first) {
+    emit_tasks_by_handle(&first);
   }
+  Serial.println("]}");
 }
 
 void setup() {
   Serial.begin(115200);
-
-  // Demo user workloads — only tasks like these are safe/practical to kill.
-  xTaskCreate(demo_worker, "demo_worker", 4096, NULL, 1, NULL);
-  xTaskCreate(demo_worker, "demo_blink", 2048, NULL, 1, NULL);
-
+  Serial.setTimeout(20);
+  delay(200);
   WiFi.mode(WIFI_STA);
-  WiFi.begin(SSID, PASSWORD);
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-  }
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  xTaskCreate(demo_worker, "demo_worker", 2048, NULL, 1, &h_demo_worker);
+  xTaskCreate(demo_blink, "demo_blink", 2048, NULL, 1, &h_demo_blink);
 }
 
 void loop() {
-  if (Serial.available()) {
-    String line = Serial.readStringUntil('\n');
-    handle_command(line);
+  unsigned long now = millis();
+  if (now - last_send >= SEND_INTERVAL_MS) {
+    last_send = now;
+    publish_metrics();
   }
-
-  publish_metrics();
-  delay(1000);
+  poll_commands();
+  vTaskDelay(pdMS_TO_TICKS(10));
 }

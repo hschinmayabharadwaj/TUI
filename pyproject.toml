@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "esp32-monitor"
+version = "1.0.0"
+description = "btop-style live ESP32 serial monitor for FreeRTOS tasks"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+dependencies = [
+    "rich>=13.0.0",
+    "pyserial>=3.5",
+]
+
+[project.scripts]
+esp32-monitor = "esp32_tui:main"
+
+[tool.setuptools]
+py-modules = ["esp32_tui", "dashboard"]

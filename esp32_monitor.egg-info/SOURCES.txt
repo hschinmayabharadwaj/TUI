@@ -1,0 +1,10 @@
+README.md
+dashboard.py
+esp32_tui.py
+pyproject.toml
+esp32_monitor.egg-info/PKG-INFO
+esp32_monitor.egg-info/SOURCES.txt
+esp32_monitor.egg-info/dependency_links.txt
+esp32_monitor.egg-info/entry_points.txt
+esp32_monitor.egg-info/requires.txt
+esp32_monitor.egg-info/top_level.txt
