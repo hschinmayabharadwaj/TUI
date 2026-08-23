@@ -1,3 +1,13 @@
+Metadata-Version: 2.4
+Name: esp32-monitor
+Version: 1.0.0
+Summary: btop-style live ESP32 serial monitor for FreeRTOS tasks
+License: MIT
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: rich>=13.0.0
+Requires-Dist: pyserial>=3.5
+
 # ESP32 Monitor TUI
 
 A btop-style terminal user interface for real-time monitoring of ESP32 microcontroller metrics over serial connection.
@@ -89,15 +99,9 @@ The TUI auto-detects a USB serial device. Override with flags or `config.example
 source venv/bin/activate
 python esp32_tui.py
 python esp32_tui.py --list-ports
-# macOS (your CP2102 board):
-python esp32_tui.py -p /dev/cu.usbserial-0001 -b 115200 -t nord
-# Linux:
 python esp32_tui.py -p /dev/ttyUSB0 -b 115200 -t nord
 ./start.sh
 make venv && make run
-
-Close Arduino Serial Monitor first. macOS returns "Resource busy" if anything
-else still holds `/dev/cu.usbserial-0001`.
 ```
 
 Install the command, man page, and desktop entry from source:

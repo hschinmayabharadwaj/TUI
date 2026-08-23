@@ -1,0 +1,77 @@
+.TH ESP32-MONITOR 1 "August 2026" "esp32-monitor 1.0.0" "User Commands"
+.SH NAME
+esp32-monitor \- btop-style live ESP32 serial monitor
+.SH SYNOPSIS
+.B esp32-monitor
+[\fIOPTIONS\fR]
+.SH DESCRIPTION
+.B esp32-monitor
+reads newline-delimited JSON telemetry from an ESP32 over a serial port
+and renders a full-screen terminal dashboard. It shows CPU clock and
+per-core usage, uptime, heap, Wi-Fi RSSI, serial/network rates, optional
+chip/PSRAM/temperature fields, and a live FreeRTOS task list.
+.PP
+Tasks can be selected with the keyboard. Kill requests require
+confirmation. Protected system tasks are blocked in the UI and rejected
+by firmware.
+.SH OPTIONS
+.TP
+.BR \-p ", " \-\-port " " \fIPATH\fR
+Serial device. Default is the configured port, or auto-detect.
+.TP
+.BR \-b ", " \-\-baud " " \fIRATE\fR
+Baud rate. Default 115200.
+.TP
+.BR \-t ", " \-\-theme " " \fINAME\fR
+Color theme: default, nord, dracula, or gruvbox.
+.TP
+.BR \-c ", " \-\-config " " \fIFILE\fR
+Load settings from an INI file.
+.TP
+.B \-\-list-ports
+Print available serial ports and exit.
+.TP
+.B \-h ", " \-\-help
+Show command-line help.
+.SH KEYBOARD
+.TP
+.B Up/Down
+Move the task selection.
+.TP
+.B PgUp/PgDn
+Scroll the task list.
+.TP
+.B A
+Toggle user tasks vs all tasks.
+.TP
+.B K
+Request kill of the selected task.
+.TP
+.B Y / N
+Confirm or cancel a pending kill.
+.TP
+.B S
+Pause or resume live graphs.
+.TP
+.B T
+Cycle built-in themes.
+.TP
+.B H / ?
+Show the in-app help overlay.
+.TP
+.B Q
+Quit.
+.SH FILES
+.TP
+.I ./esp32-monitor.ini
+Project-local configuration.
+.TP
+.I ~/.config/esp32-monitor/config.ini
+User configuration.
+.TP
+.I config.example.ini
+Example configuration shipped with the source tree.
+.SH SEE ALSO
+The ESP32 sketch in
+.I esp/esp.ino
+emits telemetry and enforces the protected-task deny-list.

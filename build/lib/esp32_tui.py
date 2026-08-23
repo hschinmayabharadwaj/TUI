@@ -8,7 +8,6 @@ import configparser
 import json
 import os
 import queue
-import re
 import sys
 import threading
 import time
@@ -71,7 +70,7 @@ lock = threading.Lock()
 running = True
 paused = False
 show_help = False
-show_all_tasks = True
+show_all_tasks = False
 selected_index = 0
 scroll_offset = 0
 kill_confirm = False
@@ -145,31 +144,28 @@ def set_status(message: str, duration: float = 4.0) -> None:
 
 def normalize_payload(payload: dict) -> dict:
     data = dict(payload)
-    raw_tasks = data.get("tasks") or data.get("tasks") or data.get("process") or []
     tasks = []
-    for task in raw_tasks:
-        if not isinstance(task, dict):
-            continue
+    for task in data.get("tasks") or []:
         t = dict(task)
-        t.setdefault("pid", t.get("pid", t.get("id", 0)))
-        t.setdefault("name", t.get("name", t.get("task", "?")))
-        t.setdefault("state", t.get("state", t.get("status", "?")))
-        t.setdefault("priority", t.get("priority", t.get("prio", 0)))
-        t.setdefault("stack_hwm", t.get("stack_hwm", t.get("stack", t.get("mem", 0))))
-        t.setdefault("protected", t.get("protected", t.get("locked", False)))
+        t.setdefault("pid", t.get("pid", 0))
+        t.setdefault("name", t.get("name", "?"))
+        t.setdefault("state", t.get("state", "?"))
+        t.setdefault("priority", t.get("priority", 0))
+        t.setdefault("stack_hwm", t.get("stack_hwm", t.get("mem", 0)))
+        t.setdefault("protected", t.get("protected", False))
         t.setdefault("cpu", t.get("cpu", 0))
         t.setdefault("user", t.get("user", "app"))
         tasks.append(t)
     data["tasks"] = tasks
-    data.setdefault("cpu_mhz", data.get("cpu_mhz", data.get("cpu_freq", 0)))
-    data.setdefault("max_cpu_mhz", data.get("max_cpu_mhz", data.get("max_cpu_mhz", 240)))
-    data.setdefault("cpu_core0", data.get("cpu_core0", data.get("core0", 0)))
-    data.setdefault("cpu_core1", data.get("cpu_core1", data.get("core1", 0)))
-    data.setdefault("heap", data.get("heap", data.get("free_heap", 0)))
-    data.setdefault("total_heap", data.get("total_heap", data.get("heap_size", 0)))
-    data.setdefault("min_heap", data.get("min_heap", data.get("min_free_heap", 0)))
-    data.setdefault("uptime_ms", data.get("uptime_ms", data.get("uptime", 0)))
-    data.setdefault("task_count", data.get("task_count", data.get("num_tasks", len(tasks))))
+    data.setdefault("cpu_mhz", data.get("cpu_mhz", 0))
+    data.setdefault("max_cpu_mhz", data.get("max_cpu_mhz", 240))
+    data.setdefault("cpu_core0", data.get("cpu_core0", 0))
+    data.setdefault("cpu_core1", data.get("cpu_core1", 0))
+    data.setdefault("heap", data.get("heap", 0))
+    data.setdefault("total_heap", data.get("total_heap", 0))
+    data.setdefault("min_heap", data.get("min_heap", 0))
+    data.setdefault("uptime_ms", data.get("uptime_ms", 0))
+    data.setdefault("task_count", data.get("task_count", len(tasks)))
     return data
 
 
@@ -458,15 +454,7 @@ def create_tasks_panel(data: dict):
         pending_pid = pending_kill_pid
         help_on = show_help
     if not all_tasks:
-        hint = "firmware sent no task list — reflash esp/esp.ino"
-        if data.get("heap") or data.get("chip"):
-            empty = Align.center(Group(
-                Text("no FreeRTOS tasks in JSON", style=THEME["warn"]),
-                Text(hint, style=THEME["dim"]),
-                Text("press A to show all tasks after reflash", style=THEME["dim"]),
-            ), vertical="middle")
-        else:
-            empty = Align.center(Group(Text("waiting for ESP32…", style=THEME["warn"]), Text("newline JSON @ serial", style=THEME["dim"])), vertical="middle")
+        empty = Align.center(Group(Text("waiting for ESP32…", style=THEME["warn"]), Text("newline JSON @ serial", style=THEME["dim"])), vertical="middle")
         return Panel(empty, title=panel_title("☰", "proc", "0 tasks"), box=box.ROUNDED, border_style=THEME["proc"], padding=(1, 1))
     table = Table(show_header=True, header_style=f"bold {THEME['dim']}", expand=True, box=None, padding=(0, 1))
     table.add_column("", width=2, justify="center")
@@ -752,74 +740,17 @@ def discover_ports():
     return list(list_ports.comports())
 
 
-def port_score(info) -> int:
-    """Higher is better. Prefer USB-UART cu.* devices on macOS."""
-    device = info.device or ""
-    blob = f"{info.description} {info.hwid} {device}".lower()
-    if "bluetooth" in blob or "debug-console" in blob or "incoming-port" in blob:
-        return -1
-    score = 0
-    if any(tok in blob for tok in ("cp210", "ch340", "ch910", "ftdi", "wch", "silicon labs", "usbserial", "usbmodem", "ttyusb", "ttyacm")):
-        score += 50
-    if "usb" in blob or "uart" in blob:
-        score += 20
-    if device.startswith("/dev/cu."):
-        score += 10
-    if device.startswith("/dev/tty.") and "usb" in blob:
-        score += 5
-    return score
-
-
 def auto_port() -> str | None:
-    ranked = sorted(
-        (port_score(info), info.device) for info in discover_ports() if port_score(info) >= 0
-    )
-    return ranked[-1][1] if ranked else None
-
-
-def port_holders(device: str) -> list[str]:
-    try:
-        import subprocess
-
-        out = subprocess.run(["lsof", "-nP", device], capture_output=True, text=True, timeout=2)
-        lines = [ln.strip() for ln in out.stdout.splitlines()[1:] if ln.strip()]
-        return lines[:8]
-    except Exception:
-        return []
-
-
-def serial_errno(exc: Exception) -> int | None:
-    for obj in (exc, getattr(exc, "os_error", None), getattr(exc, "__cause__", None)):
-        if obj is None:
+    preferred, others = [], []
+    for info in discover_ports():
+        blob = f"{info.description} {info.hwid}".lower()
+        if "bluetooth" in blob:
             continue
-        err = getattr(obj, "errno", None)
-        if err is not None:
-            return err
-    match = re.search(r"Errno (\d+)", str(exc))
-    return int(match.group(1)) if match else None
-
-
-def print_open_failure(exc: Exception, tried: str) -> None:
-    err = serial_errno(exc)
-    console.print(f"[red]serial open failed:[/] {exc}")
-    console.print(f"[dim]tried:[/] {tried}")
-    if err == 2 and tried.startswith("/dev/ttyUSB"):
-        console.print("[yellow]that path is Linux-only.[/] on macOS use the cu.usbserial device, for example:")
-        console.print("  python esp32_tui.py -p /dev/cu.usbserial-0001")
-    if err in (16, 35):
-        console.print("[yellow]the port is busy[/] — another program still has it open.")
-        holders = port_holders(tried)
-        if holders:
-            console.print("[dim]holding it:[/]")
-            for line in holders:
-                console.print(f"  {line}")
-        console.print("close Arduino Serial Monitor / PlatformIO monitor, then retry.")
-        console.print("only one app can use the USB serial port at a time.")
-    ports = discover_ports()
-    if ports:
-        console.print("[dim]available:[/]")
-        for info in ports:
-            console.print(f"  {info.device}  {info.description}")
+        if any(tok in blob for tok in ("usb", "uart", "cp210", "ch340", "ch910", "ftdi", "wch", "esp")):
+            preferred.append(info.device)
+        else:
+            others.append(info.device)
+    return (preferred or others or [None])[0]
 
 
 def load_ini(path: Path) -> dict:
@@ -847,7 +778,7 @@ def load_ini(path: Path) -> dict:
 def apply_settings(args) -> None:
     global PORT, BAUD, REFRESH, HISTORY, show_all_tasks
     global download_history, upload_history, cpu_history, heap_history
-    merged = {"port": "auto", "baud": 115200, "theme": "default", "refresh": 12, "show_all_tasks": True, "history": 80}
+    merged = {"port": "auto", "baud": 115200, "theme": "default", "refresh": 12, "show_all_tasks": False, "history": 80}
     candidates = []
     if args.config:
         candidates.append(Path(args.config).expanduser())
@@ -893,9 +824,15 @@ def parse_args(argv=None):
 def run_monitor() -> int:
     global running
     try:
-        ser = serial.Serial(PORT, BAUD, timeout=1.0)
+        ser = serial.Serial(PORT, BAUD, timeout=0.1)
     except serial.SerialException as exc:
-        print_open_failure(exc, PORT)
+        console.print(f"[red]serial open failed:[/] {exc}")
+        console.print(f"[dim]tried:[/] {PORT}")
+        ports = discover_ports()
+        if ports:
+            console.print("[dim]available:[/]")
+            for info in ports:
+                console.print(f"  {info.device}  {info.description}")
         return 1
     io_thread = threading.Thread(target=serial_worker, args=(ser,), daemon=True)
     kb_thread = threading.Thread(target=keyboard_worker, daemon=True)

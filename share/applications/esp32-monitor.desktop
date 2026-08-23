@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=ESP32 Monitor
+GenericName=ESP32 serial dashboard
+Comment=btop-style live monitor for ESP32 FreeRTOS tasks over serial
+Exec=esp32-monitor
+Terminal=true
+Categories=System;Monitor;Utility;
+Keywords=esp32;freertos;serial;btop;monitor;
+StartupNotify=false
+Icon=utilities-system-monitor
