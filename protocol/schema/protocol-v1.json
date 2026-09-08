@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ESP-Top Protocol v1 envelope",
+  "type": "object",
+  "required": ["protocol", "type", "request_id", "timestamp", "payload"],
+  "properties": {
+    "protocol": {"const": "1.0"},
+    "type": {"enum": ["HELLO", "CAPABILITIES", "DEVICE_INFO", "SYSTEM_STATS", "TASK_LIST", "WORKLOAD_LIST", "WORKLOAD_INFO", "STORAGE", "FILES", "LOG", "CRASH", "COMMAND", "COMMAND_ACK", "ERROR", "HEARTBEAT"]},
+    "request_id": {"type": "string", "minLength": 1},
+    "timestamp": {"type": "number"},
+    "payload": {"type": "object"}
+  }
+}

@@ -3,11 +3,15 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#if __has_include("secrets.h")
+#include "secrets.h"
+#endif
+
 #ifndef WIFI_SSID
-#define WIFI_SSID "Airtel_shiv_7160"
+#define WIFI_SSID ""
 #endif
 #ifndef WIFI_PASS
-#define WIFI_PASS "Air@29269"
+#define WIFI_PASS ""
 #endif
 
 #define SEND_INTERVAL_MS 1000
@@ -354,8 +358,10 @@ void setup() {
   Serial.begin(115200);
   Serial.setTimeout(20);
   delay(200);
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  if (strlen(WIFI_SSID) > 0) {
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+  }
   xTaskCreate(demo_worker, "demo_worker", 2048, NULL, 1, &h_demo_worker);
   xTaskCreate(demo_blink, "demo_blink", 2048, NULL, 1, &h_demo_blink);
 }

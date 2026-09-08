@@ -1,0 +1,12 @@
+.venv/
+venv/
+build/
+target/
+tools/ocaml/_build/
+tools/ocaml/.merlin/
+dist/
+.DS_Store
+._*
+esp/secrets.h
+*.espkg
+support-bundle/

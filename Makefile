@@ -1,34 +1,43 @@
 PREFIX ?= /usr/local
-PYTHON ?= python3
+CARGO ?= cargo
 
-.PHONY: help venv install run list-ports man uninstall
+.PHONY: help build test run list-ports install uninstall clean ocaml-verify
 
 help:
-	@echo "make venv         create .venv and install Python deps"
-	@echo "make run          launch the ESP32 monitor TUI"
-	@echo "make list-ports   show serial ports"
-	@echo "make install      install command, man page, and desktop entry"
-	@echo "make uninstall    remove installed files"
+	@echo "make build        compile the Rust host CLI/TUI"
+	@echo "make test         run Rust tests"
+	@echo "make run PORT=... launch the Rust serial TUI"
+	@echo "make list-ports   list serial devices"
+	@echo "make install      install Rust binary, man page, and desktop entry"
+	@echo "make ocaml-verify run the optional OCaml lifecycle verifier"
 
-venv:
-	$(PYTHON) -m venv .venv
-	.venv/bin/pip install -U pip
-	.venv/bin/pip install -e .
+build:
+	$(CARGO) build --release
 
-run:
-	$(PYTHON) esp32_tui.py
+test:
+	$(CARGO) test --workspace
 
-list-ports:
-	$(PYTHON) esp32_tui.py --list-ports
+run: build
+	@test -n "$(PORT)" || (echo "usage: make run PORT=/dev/cu.usbserial-0001" && exit 1)
+	target/release/esp-top tui --port $(PORT) --baud $(or $(BAUD),115200)
 
-install:
-	$(PYTHON) -m pip install .
-	install -d $(DESTDIR)$(PREFIX)/share/man/man1
-	install -d $(DESTDIR)$(PREFIX)/share/applications
-	install -m 644 man/esp32-monitor.1 $(DESTDIR)$(PREFIX)/share/man/man1/esp32-monitor.1
-	install -m 644 share/applications/esp32-monitor.desktop $(DESTDIR)$(PREFIX)/share/applications/esp32-monitor.desktop
+list-ports: build
+	target/release/esp-top --list-ports
+
+install: build
+	install -d $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(PREFIX)/share/man/man1 $(DESTDIR)$(PREFIX)/share/applications
+	install -m 755 target/release/esp-top $(DESTDIR)$(PREFIX)/bin/esp-top
+	install -m 644 man/esp-top.1 $(DESTDIR)$(PREFIX)/share/man/man1/esp-top.1
+	install -m 644 share/applications/esp-top.desktop $(DESTDIR)$(PREFIX)/share/applications/esp-top.desktop
 
 uninstall:
-	$(PYTHON) -m pip uninstall -y esp32-monitor || true
-	rm -f $(DESTDIR)$(PREFIX)/share/man/man1/esp32-monitor.1
-	rm -f $(DESTDIR)$(PREFIX)/share/applications/esp32-monitor.desktop
+	rm -f $(DESTDIR)$(PREFIX)/bin/esp-top
+	rm -f $(DESTDIR)$(PREFIX)/share/man/man1/esp-top.1
+	rm -f $(DESTDIR)$(PREFIX)/share/applications/esp-top.desktop
+
+clean:
+	cargo clean
+
+ocaml-verify:
+	@test -n "$(TRACE)" || (echo "usage: make ocaml-verify TRACE=transitions.txt" && exit 1)
+	dune exec --root tools/ocaml ./esp_top_verify.exe -- $(TRACE)

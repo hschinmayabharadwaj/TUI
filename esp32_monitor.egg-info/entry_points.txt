@@ -1,2 +1,0 @@
-[console_scripts]
-esp32-monitor = esp32_tui:main

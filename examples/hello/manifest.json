@@ -1,0 +1,24 @@
+{
+  "name": "hello-workload",
+  "version": "0.1.0",
+  "target": "esp32",
+  "architecture": "xtensa",
+  "runtime_version": ">=0.1",
+  "entrypoint": "main",
+  "resources": {
+    "max_heap": 32768,
+    "max_stack": 8192,
+    "max_cpu": 20,
+    "max_storage": 65536
+  },
+  "permissions": {
+    "network": false,
+    "filesystem": false,
+    "gpio": false
+  },
+  "restart": {
+    "policy": "on-failure",
+    "max_restarts": 3,
+    "backoff": "exponential"
+  }
+}

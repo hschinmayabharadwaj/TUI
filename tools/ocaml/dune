@@ -1,0 +1,3 @@
+(executable
+ (name esp_top_verify)
+ (modules esp_top_verify))
