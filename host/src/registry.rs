@@ -18,7 +18,7 @@ fn allowed(from: &WorkloadState, to: &WorkloadState) -> bool {
 
 impl Registry {
     pub fn new(path: Option<PathBuf>) -> Result<Self> {
-        let path = path.unwrap_or_else(|| { let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(".")); home.join(".config/esp-top/workloads.json") });
+        let path = path.unwrap_or_else(|| { let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(".")); home.join(".config/es32-top/workloads.json") });
         let mut registry = Self { path, workloads: BTreeMap::new(), audit: Vec::new() };
         registry.load()?;
         Ok(registry)
@@ -72,7 +72,7 @@ mod tests {
 
     #[test]
     fn crash_policy_quarantines_after_restart_budget() {
-        let path = std::env::temp_dir().join(format!("esp-top-rust-test-{}.json", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+        let path = std::env::temp_dir().join(format!("es32-top-rust-test-{}.json", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
         let mut registry = Registry::new(Some(path.clone())).unwrap();
         let manifest: WorkloadManifest = serde_json::from_str(r#"{"name":"sensor-worker","version":"1.0.0","restart":{"policy":"on-crash","max_restarts":1}}"#).unwrap();
         registry.install(manifest, 100).unwrap();

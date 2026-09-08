@@ -41,12 +41,13 @@ Production deployments should provide all of the following:
 
 ## Current Phase 1 Boundaries
 
-The current implementation provides local lifecycle management, SHA-256 payload verification, manifest validation, atomic local registry writes, audit history, and a serial telemetry TUI. These controls do **not** establish package authenticity or device identity.
+The current implementation provides local lifecycle management, SHA-256 payload verification, manifest validation, path-traversal-resistant package handling, atomic local registry writes, audit history, and a serial telemetry TUI. These controls do **not** establish package authenticity or device identity.
 
 In particular:
 
 - package checksums detect corruption but do not prove who produced a package
-- serial communication is not authenticated or encrypted
+- workload names and versions are strictly bounded (≤64/≤32 chars, ASCII alphanumeric, `-`, `_`; no path separators), and package payload names reject path traversal, dot-prefixed names, and control characters
+- serial input is bounded (device command buffer and host TUI line buffer are size-limited) but not authenticated or encrypted
 - workload installation and lifecycle commands are local host operations without a role or authorization model
 - the native package format does not yet provide production signature verification
 - firmware credentials belong in the ignored `esp/secrets.h`; never commit that file or any key, token, password, or private certificate

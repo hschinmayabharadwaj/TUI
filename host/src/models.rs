@@ -62,9 +62,60 @@ fn default_entrypoint() -> String { "main".into() }
 
 impl WorkloadManifest {
     pub fn validate(&self) -> anyhow::Result<()> {
-        if self.name.is_empty() || self.name.chars().any(char::is_whitespace) { anyhow::bail!("workload name must be non-empty and contain no whitespace") }
+        if self.name.is_empty() { anyhow::bail!("workload name must be non-empty") }
+        if self.name.len() > 64 { anyhow::bail!("workload name must be 64 characters or fewer") }
+        if self.name.chars().any(char::is_whitespace) { anyhow::bail!("workload name must contain no whitespace") }
+        if self.name.contains('/') || self.name.contains('\\') { anyhow::bail!("workload name must not contain path separators") }
+        if self.name == "." || self.name == ".." { anyhow::bail!("workload name must not be '.' or '..'") }
+        if !self.name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') { anyhow::bail!("workload name must contain only ASCII alphanumeric characters, hyphens, or underscores") }
         if self.version.is_empty() { anyhow::bail!("workload version must be non-empty") }
+        if self.version.len() > 32 { anyhow::bail!("workload version must be 32 characters or fewer") }
+        if self.version.contains('/') || self.version.contains('\\') { anyhow::bail!("workload version must not contain path separators") }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn manifest(name: &str, version: &str) -> WorkloadManifest {
+        WorkloadManifest {
+            name: name.into(),
+            version: version.into(),
+            target: "esp32".into(),
+            architecture: "xtensa".into(),
+            runtime_version: ">=0.1".into(),
+            entrypoint: "main".into(),
+            resources: ResourceLimits::default(),
+            permissions: Default::default(),
+            dependencies: Default::default(),
+            restart: RestartConfig::default(),
+            requires: Default::default(),
+        }
+    }
+
+    #[test]
+    fn rejects_path_traversal_names() {
+        for name in ["../etc/passwd", "a/b", "a\\b", "..", ".", "a b", ""] {
+            assert!(manifest(name, "1.0.0").validate().is_err(), "should reject name {name:?}");
+        }
+    }
+
+    #[test]
+    fn rejects_path_traversal_versions() {
+        for version in ["1.0.0/../x", "..\\x", ""] {
+            assert!(manifest("ok", version).validate().is_err(), "should reject version {version:?}");
+        }
+    }
+
+    #[test]
+    fn accepts_safe_names_and_versions() {
+        let valid = manifest("hello-workload", "1.2.3");
+        assert!(valid.validate().is_ok());
+        let long = manifest("a".repeat(64).as_str(), "1.0.0");
+        assert!(long.validate().is_ok());
+        assert!(manifest(&"a".repeat(65), "1.0.0").validate().is_err());
     }
 }
 

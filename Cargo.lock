@@ -218,7 +218,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "esp-top"
+name = "es32-top"
 version = "0.3.0"
 dependencies = [
  "anyhow",

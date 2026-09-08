@@ -18,8 +18,8 @@ cargo test --workspace
 ## Connect to a board
 
 ```bash
-./target/release/esp-top --list-ports
-./target/release/esp-top tui --port /dev/cu.usbserial-0001 --baud 115200
+./target/release/es32-top --list-ports
+./target/release/es32-top tui --port /dev/cu.usbserial-0001 --baud 115200
 ```
 
 On Linux, the device is commonly `/dev/ttyUSB0` or `/dev/ttyACM0`.
@@ -35,15 +35,15 @@ Edit `esp/secrets.h` locally. It is ignored by git and must not be committed.
 ## Build a workload package
 
 ```bash
-./target/release/esp-top package build examples/hello/manifest.json \
+./target/release/es32-top package build examples/hello/manifest.json \
   -o /tmp/hello.espkg examples/hello/main.txt
-./target/release/esp-top package verify /tmp/hello.espkg
-./target/release/esp-top --registry /tmp/registry.json workload install /tmp/hello.espkg --start
+./target/release/es32-top package verify /tmp/hello.espkg
+./target/release/es32-top --registry /tmp/registry.json workload install /tmp/hello.espkg --start
 ```
 
 ## Troubleshooting
 
-- Close Arduino Serial Monitor before starting `esp-top`; serial devices are
+- Close Arduino Serial Monitor before starting `es32-top`; serial devices are
   normally exclusive.
 - If the port is busy, check `lsof /dev/cu.usbserial-0001` on macOS or
   `lsof /dev/ttyUSB0` on Linux.

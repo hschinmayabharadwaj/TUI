@@ -15,7 +15,7 @@ use std::fs;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "esp-top", version, about = "ESP32 workload manager, Rust host CLI/TUI, and simulator")]
+#[command(name = "es32-top", version, about = "ESP32 workload manager, Rust host CLI/TUI, and simulator")]
 struct Cli {
     #[arg(long, global = true, help = "local workload registry path")]
     registry: Option<PathBuf>,
@@ -81,7 +81,7 @@ fn run_package(command: PackageCommand) -> Result<()> { match command { PackageC
 
 fn run_storage(command: StorageCommand) -> Result<()> { match command { StorageCommand::Analyze { total, entries, json: json_output } => { let entries = entries.into_iter().map(|entry| { let (name, size) = entry.split_once('=').context("storage entries must use NAME=BYTES")?; Ok(crate::storage::Entry { name: name.into(), size: size.parse()?, kind: "workload".into(), removable: true }) }).collect::<Result<Vec<_>>>()?; let analysis = crate::storage::analyze(total, entries); if json_output { println!("{}", serde_json::to_string_pretty(&analysis)?); } else { println!("STORAGE PRESSURE\n\nFlash: {:.1}% used\n{}\nLargest consumers:", analysis.used_percent, if analysis.pressure { "WARNING: storage pressure threshold exceeded" } else { "" }); for (index, entry) in analysis.entries.iter().enumerate() { println!("{}. {}  {}", index + 1, entry.name, human(entry.size)); } println!("\nPotential recovery: {}\nAvailable now: {}", human(analysis.recoverable), human(analysis.free)); } } } Ok(()) }
 
-fn run_support_bundle(output: PathBuf, path: Option<PathBuf>) -> Result<()> { let registry = open_registry(path)?; fs::create_dir_all(&output)?; fs::write(output.join("device.json"), serde_json::to_vec_pretty(&json!({"client":"esp-top","version":env!("CARGO_PKG_VERSION")}))?)?; fs::write(output.join("workloads.json"), serde_json::to_vec_pretty(&registry.list())?)?; fs::write(output.join("audit.json"), serde_json::to_vec_pretty(&registry.audit)?)?; println!("{}", output.display()); Ok(()) }
+fn run_support_bundle(output: PathBuf, path: Option<PathBuf>) -> Result<()> { let registry = open_registry(path)?; fs::create_dir_all(&output)?; fs::write(output.join("device.json"), serde_json::to_vec_pretty(&json!({"client":"es32-top","version":env!("CARGO_PKG_VERSION")}))?)?; fs::write(output.join("workloads.json"), serde_json::to_vec_pretty(&registry.list())?)?; fs::write(output.join("audit.json"), serde_json::to_vec_pretty(&registry.audit)?)?; println!("{}", output.display()); Ok(()) }
 fn doctor(path: Option<PathBuf>) -> Result<()> { let registry = open_registry(path)?; let failures: Vec<_> = registry.list().into_iter().filter(|record| matches!(record.state, WorkloadState::Failed | WorkloadState::Quarantined)).collect(); if failures.is_empty() { println!("ESP-TOP DOCTOR: OK"); Ok(()) } else { for record in failures { println!("{}: {:?}", record.manifest.name, record.state); } bail!("workload problems detected") } }
 fn simulate(name: String) -> Result<()> { println!("ESP-TOP SIMULATOR\nworkload: {name}\nprotocol: {}\n", crate::protocol::VERSION); println!("{}", crate::protocol::encode("WORKLOAD_LIST", json!({"workloads":[{"id":101,"name":name,"state":"RUNNING"}]}), "sim-1")?); Ok(()) }
 

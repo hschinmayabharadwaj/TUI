@@ -37,28 +37,28 @@ make test
 ## CLI
 
 ```bash
-./target/release/esp-top workload list
-./target/release/esp-top package build examples/hello/manifest.json \
+./target/release/es32-top workload list
+./target/release/es32-top package build examples/hello/manifest.json \
   -o /tmp/hello.espkg examples/hello/main.txt
-./target/release/esp-top package verify /tmp/hello.espkg
-./target/release/esp-top workload install /tmp/hello.espkg --start
-./target/release/esp-top workload inspect hello-workload
-./target/release/esp-top workload stop hello-workload
-./target/release/esp-top workload restart hello-workload
-./target/release/esp-top workload remove hello-workload
-./target/release/esp-top doctor
-./target/release/esp-top support-bundle -o /tmp/esp-top-support
-./target/release/esp-top simulate --name hello-workload
+./target/release/es32-top package verify /tmp/hello.espkg
+./target/release/es32-top workload install /tmp/hello.espkg --start
+./target/release/es32-top workload inspect hello-workload
+./target/release/es32-top workload stop hello-workload
+./target/release/es32-top workload restart hello-workload
+./target/release/es32-top workload remove hello-workload
+./target/release/es32-top doctor
+./target/release/es32-top support-bundle -o /tmp/es32-top-support
+./target/release/es32-top simulate --name hello-workload
 ```
 
-The registry is stored at `~/.config/esp-top/workloads.json`; use
+The registry is stored at `~/.config/es32-top/workloads.json`; use
 `--registry FILE` for an isolated registry.
 
 ## Live monitor
 
 ```bash
-./target/release/esp-top --list-ports
-./target/release/esp-top tui --port /dev/cu.usbserial-0001 --baud 115200
+./target/release/es32-top --list-ports
+./target/release/es32-top tui --port /dev/cu.usbserial-0001 --baud 115200
 ```
 
 Press `q` to quit. The monitor accepts the existing newline-delimited ESP32
