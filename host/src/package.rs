@@ -1,0 +1,12 @@
+use crate::models::WorkloadManifest;
+use anyhow::{Context, Result, bail};
+use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+pub fn sha256_file(path: &Path) -> Result<String> { let bytes = fs::read(path).with_context(|| format!("cannot read {}", path.display()))?; let mut hash = Sha256::new(); hash.update(bytes); Ok(format!("{:x}", hash.finalize())) }
+pub fn package_bytes(path: &Path) -> Result<u64> { let mut total = 0; for entry in walk(path)? { if entry.is_file() { total += entry.metadata()?.len(); } } Ok(total) }
+fn walk(path: &Path) -> Result<Vec<PathBuf>> { let mut result = Vec::new(); if path.is_dir() { for item in fs::read_dir(path)? { let item = item?; result.push(item.path()); if item.path().is_dir() { result.extend(walk(&item.path())?); } } } Ok(result) }
+pub fn build(manifest_path: &Path, output: &Path, payloads: &[PathBuf]) -> Result<()> { if output.exists() { bail!("package output already exists: {}", output.display()) } let manifest: WorkloadManifest = serde_json::from_str(&fs::read_to_string(manifest_path)?)?; manifest.validate()?; fs::create_dir_all(output.join("payload"))?; let mut hashes = Map::new(); for source in payloads { if !source.is_file() { bail!("payload is not a file: {}", source.display()) } let name = source.file_name().context("payload has no filename")?.to_string_lossy().to_string(); let target = output.join("payload").join(&name); fs::copy(source, &target)?; hashes.insert(name, Value::String(sha256_file(&target)?)); } let mut value = serde_json::to_value(manifest)?; value["package_version"] = Value::from(1); value["payload"] = Value::Object(hashes); fs::write(output.join("manifest.json"), serde_json::to_vec_pretty(&value)?)?; Ok(()) }
+pub fn verify(path: &Path) -> Result<WorkloadManifest> { if !path.is_dir() { bail!("native .espkg packages are directories: {}", path.display()) } let value: Value = serde_json::from_str(&fs::read_to_string(path.join("manifest.json"))?)?; if value["package_version"].as_u64() != Some(1) { bail!("unsupported package version") } if let Some(payloads) = value["payload"].as_object() { for (name, expected) in payloads { let file = path.join("payload").join(name); if !file.is_file() { bail!("missing payload: {name}") } if sha256_file(&file)? != expected.as_str().unwrap_or_default() { bail!("checksum mismatch: {name}") } } } let manifest: WorkloadManifest = serde_json::from_value(value)?; manifest.validate()?; Ok(manifest) }
