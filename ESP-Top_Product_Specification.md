@@ -1249,7 +1249,7 @@ monitor
 Create a native CLI:
 
 ```bash
-esp-top
+es32-top
 ```
 
 and management commands:
@@ -1813,7 +1813,7 @@ Refactor into modules.
 # 56. Recommended Repository Structure
 
 ```text
-esp-top/
+es32-top/
 │
 ├── runtime/
 │   ├── supervisor/
@@ -1837,7 +1837,7 @@ esp-top/
 │   └── codecs/
 │
 ├── cli/
-│   └── esp-top/
+│   └── es32-top/
 │
 ├── tui/
 │   ├── screens/
@@ -1935,7 +1935,7 @@ only after a trustworthy release/signing system exists.
 Provide:
 
 ```text
-esp-top.desktop
+es32-top.desktop
 ```
 
 for Linux desktop environments.
@@ -1945,7 +1945,7 @@ Application metadata:
 ```text
 Name=ESP-Top
 Comment=ESP32 Runtime Monitor
-Exec=esp-top
+Exec=es32-top
 Terminal=true
 Type=Application
 Categories=Development;System;
@@ -1958,7 +1958,7 @@ Categories=Development;System;
 Provide:
 
 ```text
-esp-top(1)
+es32-top(1)
 esp(1)
 esp-workload(1)
 ```

@@ -97,8 +97,13 @@ static int json_int(const String &line, const char *key, int fallback) {
   int idx = line.indexOf(needle);
   if (idx < 0) return fallback;
   idx += needle.length();
+  if (idx >= (int)line.length()) return fallback;
   while (idx < (int)line.length() && line[idx] == ' ') idx++;
-  return line.substring(idx).toInt();
+  if (idx >= (int)line.length()) return fallback;
+  int start = idx;
+  while (idx < (int)line.length() && line[idx] != ',' && line[idx] != '}' && line[idx] != ' ') idx++;
+  if (idx == start) return fallback;
+  return line.substring(start, idx).toInt();
 }
 
 static String json_string(const String &line, const char *key) {
@@ -106,8 +111,9 @@ static String json_string(const String &line, const char *key) {
   int idx = line.indexOf(needle);
   if (idx < 0) return "";
   idx += needle.length();
+  if (idx >= (int)line.length()) return "";
   int end = line.indexOf('"', idx);
-  if (end < 0) return "";
+  if (end < 0 || end <= idx) return "";
   return line.substring(idx, end);
 }
 
@@ -133,7 +139,8 @@ static TaskHandle_t find_task(int pid, const char *name, char *found_name, size_
     UBaseType_t n = uxTaskGetNumberOfTasks();
     if (n > MAX_TASKS) n = MAX_TASKS;
     TaskStatus_t *arr = (TaskStatus_t *)pvPortMalloc(n * sizeof(TaskStatus_t));
-    if (arr) {
+    if (!arr) { /* allocation failed, skip trace scan */ }
+    else {
       n = uxTaskGetSystemState(arr, n, NULL);
       for (UBaseType_t i = 0; i < n && count < MAX_TASKS; i++) {
         candidates[count++] = arr[i].xHandle;
@@ -298,6 +305,7 @@ static void publish_metrics() {
   UBaseType_t n = uxTaskGetNumberOfTasks();
   if (n > MAX_TASKS) n = MAX_TASKS;
   arr = (TaskStatus_t *)pvPortMalloc(n * sizeof(TaskStatus_t));
+  if (!arr) { n = 0; }
   if (arr) {
     uint32_t idle0 = 0, idle1 = 0;
     filled = uxTaskGetSystemState(arr, n, &total_runtime);

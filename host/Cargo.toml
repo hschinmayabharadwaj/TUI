@@ -1,9 +1,14 @@
 [package]
-name = "esp-top"
+name = "es32-top"
 version = "0.3.0"
 edition = "2021"
-description = "ESP32 workload manager, protocol client, package tool, simulator, and TUI"
+description = "ESP32 workload manager, protocol client, package tool, simulator, and serial TUI (btop-style host runtime manager)"
 license = "MIT"
+readme = "README.md"
+repository = "https://github.com/hschinmayabharadwaj/TUI"
+keywords = ["esp32", "tui", "workload", "telemetry", "embedded"]
+categories = ["command-line-utilities", "embedded"]
+exclude = ["target/"]
 
 [dependencies]
 anyhow = "1"

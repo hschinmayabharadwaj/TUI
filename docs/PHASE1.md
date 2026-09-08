@@ -3,7 +3,7 @@
 The project uses Rust for the host and C++/C for the device runtime.
 
 ```text
-ESP32 runtime -> versioned protocol envelope -> serial transport -> esp-top
+ESP32 runtime -> versioned protocol envelope -> serial transport -> es32-top
                                                    |                 |
                                              workload CLI       native TUI
 ```

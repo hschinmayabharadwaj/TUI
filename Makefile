@@ -19,21 +19,21 @@ test:
 
 run: build
 	@test -n "$(PORT)" || (echo "usage: make run PORT=/dev/cu.usbserial-0001" && exit 1)
-	target/release/esp-top tui --port $(PORT) --baud $(or $(BAUD),115200)
+	target/release/es32-top tui --port $(PORT) --baud $(or $(BAUD),115200)
 
 list-ports: build
-	target/release/esp-top --list-ports
+	target/release/es32-top --list-ports
 
 install: build
 	install -d $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(PREFIX)/share/man/man1 $(DESTDIR)$(PREFIX)/share/applications
-	install -m 755 target/release/esp-top $(DESTDIR)$(PREFIX)/bin/esp-top
-	install -m 644 man/esp-top.1 $(DESTDIR)$(PREFIX)/share/man/man1/esp-top.1
-	install -m 644 share/applications/esp-top.desktop $(DESTDIR)$(PREFIX)/share/applications/esp-top.desktop
+	install -m 755 target/release/es32-top $(DESTDIR)$(PREFIX)/bin/es32-top
+	install -m 644 man/es32-top.1 $(DESTDIR)$(PREFIX)/share/man/man1/es32-top.1
+	install -m 644 share/applications/es32-top.desktop $(DESTDIR)$(PREFIX)/share/applications/es32-top.desktop
 
 uninstall:
-	rm -f $(DESTDIR)$(PREFIX)/bin/esp-top
-	rm -f $(DESTDIR)$(PREFIX)/share/man/man1/esp-top.1
-	rm -f $(DESTDIR)$(PREFIX)/share/applications/esp-top.desktop
+	rm -f $(DESTDIR)$(PREFIX)/bin/es32-top
+	rm -f $(DESTDIR)$(PREFIX)/share/man/man1/es32-top.1
+	rm -f $(DESTDIR)$(PREFIX)/share/applications/es32-top.desktop
 
 clean:
 	cargo clean

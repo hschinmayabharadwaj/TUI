@@ -1,12 +1,12 @@
-.TH ESP-TOP 1 "September 2026" "esp-top 0.2.0" "User Commands"
+.TH ES32-TOP 1 "September 2026" "es32-top 0.3.0" "User Commands"
 .SH NAME
-esp-top \- Rust ESP32 runtime manager and terminal monitor
+es32-top \- Rust ESP32 runtime manager and terminal monitor
 .SH SYNOPSIS
-.B esp-top
+.B es32-top
 .I COMMAND
-[IOPTIONSR]
+[.I OPTIONS]
 .SH DESCRIPTION
-.B esp-top
+.B es32-top
 manages versioned ESP32 workloads and provides a dependency-free terminal
 monitor over USB serial. The host implementation is Rust; the ESP32 runtime
 is Arduino/ESP-IDF compatible C++.
@@ -35,7 +35,7 @@ Emit a protocol workload-list frame without hardware.
 .SH OPTIONS
 .TP
 .B --registry FILE
-Use an alternate local registry. Default is ~/.config/esp-top/workloads.json.
+Use an alternate local registry. Default is ~/.config/es32-top/workloads.json.
 .TP
 .B --list-ports
 List candidate serial devices.
