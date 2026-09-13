@@ -58,29 +58,28 @@ The registry is stored at `~/.config/es32-top/workloads.json`; use
 
 ```bash
 ./target/release/es32-top --list-ports
-./target/release/es32-top tui --port /dev/cu.usbserial-0001 --baud 115200
+./target/release/es32-top tui --port /dev/cu.usbserial-0001 --baud 115200 --theme nord
 ```
 
-The monitor is a responsive btop-inspired dashboard: CPU core meters, heap,
-flash/PSRAM, Wi-Fi, uptime, and a live FreeRTOS task list. It runs on Linux,
-macOS, and BSD terminals through Crossterm and the native `serialport` backend.
-Press `q` to quit; `?` opens the built-in shortcut guide; `t` cycles Ocean,
-Forest, and Amber themes; `s` sorts tasks by CPU; `i` toggles protected system
-tasks; and `+`/`-` changes its redraw interval. The monitor accepts the existing
-newline-delimited ESP32 telemetry JSON while the versioned protocol is introduced
-in parallel.
+The monitor is a btop-style ESP32 dashboard: CPU/core history, heap/PSRAM/flash,
+Wi-Fi/device status, and a selectable FreeRTOS task table. Use `1`, `2`, `3`,
+and `6` for views; arrow keys select a task; `Space` pauses; `h`/`?` shows
+in-app help; and `q` quits. It uses ANSI terminals and supports Linux, macOS,
+and BSDs. It accepts the existing newline-delimited ESP32 telemetry JSON.
 
-Optional settings are read from `~/.config/es32-top/config.json` (or the
-platform's `XDG_CONFIG_HOME`) and may be overridden at launch:
+Optional configuration is `~/.config/es32-top/config.toml` (or `--config`):
 
-```bash
-./target/release/es32-top tui --port /dev/cu.usbserial-0001 \
-  --theme forest --refresh-ms 150
+```toml
+[ui]
+theme = "nord"
+refresh_rate = 4
+
+[monitor]
+history_seconds = 60
 ```
 
-```json
-{ "theme": "ocean", "refresh_ms": 250, "show_system_tasks": true }
-```
+Built-in themes: `default`, `nord`, `dracula`, `solarized`, `monokai`,
+`high-contrast`, and `minimal`.
 
 ## ESP32 firmware
 
