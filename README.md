@@ -61,8 +61,26 @@ The registry is stored at `~/.config/es32-top/workloads.json`; use
 ./target/release/es32-top tui --port /dev/cu.usbserial-0001 --baud 115200
 ```
 
-Press `q` to quit. The monitor accepts the existing newline-delimited ESP32
-telemetry JSON while the versioned protocol is introduced in parallel.
+The monitor is a responsive btop-inspired dashboard: CPU core meters, heap,
+flash/PSRAM, Wi-Fi, uptime, and a live FreeRTOS task list. It runs on Linux,
+macOS, and BSD terminals through Crossterm and the native `serialport` backend.
+Press `q` to quit; `?` opens the built-in shortcut guide; `t` cycles Ocean,
+Forest, and Amber themes; `s` sorts tasks by CPU; `i` toggles protected system
+tasks; and `+`/`-` changes its redraw interval. The monitor accepts the existing
+newline-delimited ESP32 telemetry JSON while the versioned protocol is introduced
+in parallel.
+
+Optional settings are read from `~/.config/es32-top/config.json` (or the
+platform's `XDG_CONFIG_HOME`) and may be overridden at launch:
+
+```bash
+./target/release/es32-top tui --port /dev/cu.usbserial-0001 \
+  --theme forest --refresh-ms 150
+```
+
+```json
+{ "theme": "ocean", "refresh_ms": 250, "show_system_tasks": true }
+```
 
 ## ESP32 firmware
 
