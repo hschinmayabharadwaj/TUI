@@ -26,7 +26,14 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    Tui { #[arg(short, long)] port: String, #[arg(short, long, default_value_t = 115200)] baud: u32 },
+    Tui {
+        #[arg(short, long)] port: String,
+        #[arg(short, long, default_value_t = 115200)] baud: u32,
+        #[arg(long, help = "theme: default, nord, dracula, solarized, monokai, high-contrast, minimal")] theme: Option<String>,
+        #[arg(long, help = "samples retained per second (1-30)")] refresh_rate: Option<u64>,
+        #[arg(long, help = "seconds of chart history to retain (10-600)")] history_seconds: Option<usize>,
+        #[arg(long, help = "TOML UI configuration file")] config: Option<PathBuf>,
+    },
     #[command(subcommand)] Workload(WorkloadCommand),
     #[command(subcommand)] Package(PackageCommand),
     #[command(subcommand)] Storage(StorageCommand),
@@ -85,4 +92,4 @@ fn run_support_bundle(output: PathBuf, path: Option<PathBuf>) -> Result<()> { le
 fn doctor(path: Option<PathBuf>) -> Result<()> { let registry = open_registry(path)?; let failures: Vec<_> = registry.list().into_iter().filter(|record| matches!(record.state, WorkloadState::Failed | WorkloadState::Quarantined)).collect(); if failures.is_empty() { println!("ESP-TOP DOCTOR: OK"); Ok(()) } else { for record in failures { println!("{}: {:?}", record.manifest.name, record.state); } bail!("workload problems detected") } }
 fn simulate(name: String) -> Result<()> { println!("ESP-TOP SIMULATOR\nworkload: {name}\nprotocol: {}\n", crate::protocol::VERSION); println!("{}", crate::protocol::encode("WORKLOAD_LIST", json!({"workloads":[{"id":101,"name":name,"state":"RUNNING"}]}), "sim-1")?); Ok(()) }
 
-fn main() -> Result<()> { let Cli { registry, list_ports, command } = Cli::parse(); if list_ports { return tui::list_ports(); } match command.context("a subcommand is required")? { Command::Tui { port, baud } => tui::run(&port, baud), Command::Workload(command) => run_workload(command, registry), Command::Package(command) => run_package(command), Command::Storage(command) => run_storage(command), Command::Device { action } => { println!("local  serial  protocol {}  action {action}", crate::protocol::VERSION); Ok(()) }, Command::Doctor => doctor(registry), Command::SupportBundle { output } => run_support_bundle(output, registry), Command::Simulate { name } => simulate(name) } }
+fn main() -> Result<()> { let Cli { registry, list_ports, command } = Cli::parse(); if list_ports { return tui::list_ports(); } match command.context("a subcommand is required")? { Command::Tui { port, baud, theme, refresh_rate, history_seconds, config } => { let mut options = tui::options_from_config(tui::TuiOptions { config, ..Default::default() }); if let Some(value) = theme { options.theme = value; } if let Some(value) = refresh_rate { options.refresh_rate = value.clamp(1, 30); } if let Some(value) = history_seconds { options.history_seconds = value.clamp(10, 600); } tui::run(&port, baud, options) }, Command::Workload(command) => run_workload(command, registry), Command::Package(command) => run_package(command), Command::Storage(command) => run_storage(command), Command::Device { action } => { println!("local  serial  protocol {}  action {action}", crate::protocol::VERSION); Ok(()) }, Command::Doctor => doctor(registry), Command::SupportBundle { output } => run_support_bundle(output, registry), Command::Simulate { name } => simulate(name) } }

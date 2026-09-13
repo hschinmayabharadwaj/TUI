@@ -58,11 +58,28 @@ The registry is stored at `~/.config/es32-top/workloads.json`; use
 
 ```bash
 ./target/release/es32-top --list-ports
-./target/release/es32-top tui --port /dev/cu.usbserial-0001 --baud 115200
+./target/release/es32-top tui --port /dev/cu.usbserial-0001 --baud 115200 --theme nord
 ```
 
-Press `q` to quit. The monitor accepts the existing newline-delimited ESP32
-telemetry JSON while the versioned protocol is introduced in parallel.
+The monitor is a btop-style ESP32 dashboard: CPU/core history, heap/PSRAM/flash,
+Wi-Fi/device status, and a selectable FreeRTOS task table. Use `1`, `2`, `3`,
+and `6` for views; arrow keys select a task; `Space` pauses; `h`/`?` shows
+in-app help; and `q` quits. It uses ANSI terminals and supports Linux, macOS,
+and BSDs. It accepts the existing newline-delimited ESP32 telemetry JSON.
+
+Optional configuration is `~/.config/es32-top/config.toml` (or `--config`):
+
+```toml
+[ui]
+theme = "nord"
+refresh_rate = 4
+
+[monitor]
+history_seconds = 60
+```
+
+Built-in themes: `default`, `nord`, `dracula`, `solarized`, `monokai`,
+`high-contrast`, and `minimal`.
 
 ## ESP32 firmware
 
