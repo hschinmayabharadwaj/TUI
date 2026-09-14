@@ -1,10 +1,12 @@
-// ESP-Top runtime foundation scaffold.
+// ESP-Top runtime foundation.
 //
-// This sketch is intentionally separate from esp/esp.ino: the latter remains
-// the v0 telemetry prototype. This runtime owns a small workload registry and
-// speaks the versioned envelope used by the host client. Native workload
-// loading and hardware-specific accounting are added behind these boundaries.
+// The runtime speaks versioned envelopes and publishes a telemetry frame every
+// second.  Keeping telemetry in this sketch is important: the host TUI is
+// normally used with this runtime (rather than the older esp/esp.ino sketch).
 #include <Arduino.h>
+#include <WiFi.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *PROTOCOL = "1.0";
 static const size_t MAX_WORKLOADS = 8;
@@ -16,6 +18,41 @@ static Workload workloads[MAX_WORKLOADS] = {
     {101, "hello-workload", "0.1.0", INSTALLED},
 };
 static const size_t workload_count = 1;
+
+static void telemetry() {
+  const uint32_t heap = ESP.getFreeHeap();
+  const uint32_t total_heap = ESP.getHeapSize();
+  const uint32_t psram = ESP.getPsramSize();
+  const int rssi = WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0;
+  float temperature = 0;
+#if defined(CONFIG_IDF_TARGET_ESP32)
+  temperature = temperatureRead();
+#endif
+
+  Serial.print("{\"protocol\":\""); Serial.print(PROTOCOL);
+  Serial.print("\",\"type\":\"TELEMETRY\",\"request_id\":\"sample\",\"timestamp\":");
+  Serial.print(millis() / 1000.0, 3);
+  Serial.print(",\"payload\":{");
+  Serial.print("\"cpu_mhz\":"); Serial.print(getCpuFrequencyMhz());
+  Serial.print(",\"max_cpu_mhz\":240");
+  // CPU accounting requires an ESP-IDF build-time option that Arduino does
+  // not enable on every board package. Report a known value until the runtime
+  // accounting adapter is installed rather than fabricating utilization.
+  Serial.print(",\"cpu_core0\":0,\"cpu_core1\":0");
+  Serial.print(",\"heap\":"); Serial.print(heap);
+  Serial.print(",\"total_heap\":"); Serial.print(total_heap);
+  Serial.print(",\"min_heap\":"); Serial.print(ESP.getMinFreeHeap());
+  Serial.print(",\"flash\":"); Serial.print(ESP.getFlashChipSize());
+  Serial.print(",\"psram\":"); Serial.print(psram);
+  Serial.print(",\"psram_free\":"); Serial.print(ESP.getFreePsram());
+  Serial.print(",\"rssi\":"); Serial.print(rssi);
+  Serial.print(",\"tx_rate\":0,\"rx_rate\":0");
+  Serial.print(",\"temp_c\":"); Serial.print(temperature, 1);
+  Serial.print(",\"uptime_ms\":"); Serial.print(millis());
+  Serial.print(",\"chip\":\""); Serial.print(ESP.getChipModel()); Serial.print("\"");
+  Serial.print(",\"task_count\":"); Serial.print(uxTaskGetNumberOfTasks());
+  Serial.println(",\"tasks\":[]}}");
+}
 
 static const char *state_name(WorkloadState state) {
   switch (state) {
@@ -61,7 +98,7 @@ void loop() {
   static unsigned long last = 0;
   if (millis() - last >= 1000) {
     last = millis();
-    workload_list();
+    telemetry();
   }
   // Command parsing is kept behind the same framed protocol boundary; the
   // production implementation will validate request IDs and signatures here.
