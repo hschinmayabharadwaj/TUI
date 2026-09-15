@@ -18,7 +18,7 @@ fn allowed(from: &WorkloadState, to: &WorkloadState) -> bool {
 
 impl Registry {
     pub fn new(path: Option<PathBuf>) -> Result<Self> {
-        let path = path.unwrap_or_else(|| { let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(".")); home.join(".config/es32-top/workloads.json") });
+        let path = path.unwrap_or_else(crate::config::registry_path);
         let mut registry = Self { path, workloads: BTreeMap::new(), audit: Vec::new() };
         registry.load()?;
         Ok(registry)
