@@ -18,6 +18,8 @@ tools/ocaml/           optional lifecycle verifier/schema boundary
 ```
 
 The host requirements are Rust/Cargo and a POSIX terminal/serial environment.
+The same Rust host code supports Linux and macOS; the device requirements are
+the ESP32 Arduino core or ESP-IDF.
 The device requirements are the ESP32 Arduino core or ESP-IDF.
 
 ## Build
@@ -51,21 +53,59 @@ make test
 ./target/release/es32-top simulate --name hello-workload
 ```
 
-The registry is stored at `~/.config/es32-top/workloads.json`; use
-`--registry FILE` for an isolated registry.
+The registry is resolved with the `dirs` crate in the platform's canonical
+user config directory (typically `$XDG_CONFIG_HOME/es32-top` on Linux and
+`~/Library/Application Support/es32-top` on macOS); use `--registry FILE` for
+an isolated registry.
 
-## Live monitor
+## Live monitor (Linux and macOS)
 
 ```bash
 ./target/release/es32-top --list-ports
-./target/release/es32-top tui --port /dev/cu.usbserial-0001 --baud 115200 --theme nord
+./target/release/es32-top tui --baud 115200 --theme nord
 ```
 
+Without `--port`, the host auto-selects the only detected ESP32 USB-serial
+adapter (CP210x, CH340, FTDI, or Espressif USB/JTAG). If more than one is
+present, pass the path shown by `--list-ports`:
+
+| Linux | macOS |
+|---|---|
+| `/dev/ttyUSB0` or `/dev/ttyACM0` | `/dev/cu.usbserial-*` or `/dev/cu.usbmodem-*` |
+| If denied, add the user to `dialout` and log in again | No `dialout` group is required; close any other serial monitor |
+
 The monitor is a btop-style ESP32 dashboard: CPU/core history, heap/PSRAM/flash,
-Wi-Fi/device status, and a selectable FreeRTOS task table. Use `1`, `2`, `3`,
-and `6` for views; arrow keys select a task; `Space` pauses; `h`/`?` shows
-in-app help; and `q` quits. It uses ANSI terminals and supports Linux, macOS,
-and BSDs. It accepts the existing newline-delimited ESP32 telemetry JSON.
+Wi-Fi/device status, and a selectable FreeRTOS task table. Arrow keys select a
+task; `k` then `y` confirms a kill (`n`/Escape cancels); `Space` pauses; and
+`q` quits. Ratatui/crossterm provides equivalent rendering and keyboard input
+on Linux terminals and macOS Terminal/iTerm2. A reconnecting state is shown if
+telemetry stops arriving.
+
+### Linux
+
+```bash
+sudo apt install build-essential pkg-config libudev-dev
+cargo build --release
+cargo test --workspace
+./target/release/es32-top --list-ports
+./target/release/es32-top tui
+```
+
+If opening a serial device is denied, run `sudo usermod -aG dialout "$USER"`
+and start a new login session.
+
+### macOS
+
+```bash
+xcode-select --install
+cargo build --release
+cargo test --workspace
+./target/release/es32-top --list-ports
+./target/release/es32-top tui
+```
+
+Use a `/dev/cu.*` path for an explicit `--port`; macOS has no `dialout` group.
+Close Arduino Serial Monitor or another application using the device first.
 
 Optional configuration is `~/.config/es32-top/config.toml` (or `--config`):
 
@@ -91,6 +131,15 @@ Built-in themes: `default`, `nord`, `dracula`, `solarized`, `monokai`,
 The older `esp/esp.ino` remains available as a telemetry/reference sketch. Wi-Fi
 credentials belong in the ignored `esp/secrets.h`, copied from
 `esp/secrets.example.h`; no credentials are stored in source control.
+
+## Cross-platform test plan
+
+Run `cargo test --workspace` on both Linux and macOS. Manual checks should
+cover: `--list-ports` and automatic single-port selection; multiple-port
+selection and `--port` override; Linux `dialout` permission diagnostics;
+canonical config paths; terminal resize and redraw; kill confirmation and
+cancel; disconnected/reconnecting status; and registry invalid transitions,
+crash-budget quarantine, atomic persistence, and package traversal rejection.
 
 ## Package format
 
@@ -119,6 +168,5 @@ The optional OCaml tool in `tools/ocaml/` verifies lifecycle traces against the
 same state machine. Install OCaml/Dune and run
 `make ocaml-verify TRACE=transitions.txt`.
 
-Next: serial command transport, real ESP32 workload registry integration,
-resource attribution, atomic device-side updates, crash capture, signing, and
-rollback.
+Next: real ESP32 workload registry integration, resource attribution, atomic
+device-side updates, crash capture, signing, and rollback.
